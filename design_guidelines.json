@@ -1,0 +1,163 @@
+{
+  "theme": "Industrial Dark",
+  "archetype": "Archetype 4 Variant: Swiss High-Contrast with Technical Engineering",
+  "reasoning": "A field service mobile CRM (Dachaufmaß) must look professional, authoritative, and legible outdoors. Dark slate backgrounds reduce glare for installers, while Solar Amber and Eco Green accents provide high contrast for technical inputs and success states. The aesthetic is heavily inspired by engineering blueprints and high-end technical instruments, avoiding generic SaaS aesthetics.",
+  "colors": {
+    "background": {
+      "default": "#0F172A",
+      "paper": "#1E293B",
+      "elevated": "#334155"
+    },
+    "primary": {
+      "main": "#F59E0B",
+      "dark": "#D97706",
+      "contrastText": "#FFFFFF"
+    },
+    "secondary": {
+      "main": "#10B981",
+      "dark": "#059669",
+      "contrastText": "#FFFFFF"
+    },
+    "roof_audit_tool": {
+      "grid": "#334155",
+      "roof_outline": "#EF4444",
+      "rafter_lines": "#3B82F6",
+      "pv_module": "rgba(16, 185, 129, 0.4)",
+      "pv_module_stroke": "#10B981",
+      "chimney": "#F97316",
+      "dimension_text": "#F8FAFC",
+      "dimension_bg": "#0F172A"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "disabled": "#475569"
+    },
+    "border": "#334155"
+  },
+  "typography": {
+    "fontFamily": "System",
+    "weights": {
+      "regular": "400",
+      "medium": "500",
+      "bold": "700"
+    },
+    "sizes": {
+      "h1": {
+        "fontSize": 32,
+        "lineHeight": 40,
+        "fontWeight": "700",
+        "letterSpacing": -0.5
+      },
+      "h2": {
+        "fontSize": 24,
+        "lineHeight": 32,
+        "fontWeight": "700",
+        "letterSpacing": -0.5
+      },
+      "h3": {
+        "fontSize": 20,
+        "lineHeight": 28,
+        "fontWeight": "700"
+      },
+      "body1": {
+        "fontSize": 16,
+        "lineHeight": 24,
+        "fontWeight": "400"
+      },
+      "body2": {
+        "fontSize": 14,
+        "lineHeight": 20,
+        "fontWeight": "400"
+      },
+      "caption": {
+        "fontSize": 12,
+        "lineHeight": 16,
+        "fontWeight": "500",
+        "letterSpacing": 0.5,
+        "textTransform": "uppercase"
+      }
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32,
+    "xxl": 48
+  },
+  "components": {
+    "card": {
+      "backgroundColor": "#1E293B",
+      "borderRadius": 12,
+      "borderWidth": 1,
+      "borderColor": "#334155",
+      "padding": 16,
+      "shadowColor": "#000",
+      "shadowOffset": { "width": 0, "height": 4 },
+      "shadowOpacity": 0.3,
+      "shadowRadius": 8,
+      "elevation": 5
+    },
+    "input": {
+      "backgroundColor": "#0F172A",
+      "borderRadius": 8,
+      "borderWidth": 1,
+      "borderColor": "#334155",
+      "paddingHorizontal": 16,
+      "paddingVertical": 12,
+      "color": "#F8FAFC",
+      "fontSize": 16
+    },
+    "button": {
+      "primary": {
+        "backgroundColor": "#F59E0B",
+        "borderRadius": 8,
+        "paddingVertical": 14,
+        "paddingHorizontal": 24,
+        "alignItems": "center",
+        "justifyContent": "center"
+      }
+    },
+    "tabBar": {
+      "backgroundColor": "#1E293B",
+      "borderTopWidth": 1,
+      "borderTopColor": "#334155",
+      "activeTintColor": "#F59E0B",
+      "inactiveTintColor": "#94A3B8"
+    }
+  },
+  "screens": {
+    "dashboard": {
+      "kpi_layout": "Layered cards with clear value hierarchy. Use sparkline SVGs for trends. Emphasize values like 'kWp installed' with secondary eco-green color."
+    },
+    "roof_audit_tool": {
+      "layout": "Split view: Input form (Länge, Breite, Walm, First, Sparrenabstand) above, SVG rendering below.",
+      "svg_rendering": "Must look like a technical blueprint. Grid background. Red polygon for roof outline. Blue lines for rafters. Green dashed/filled rectangles for PV modules. Arrow overlays for dimensions."
+    }
+  },
+  "instructions_to_main_agent": [
+    "Use pure React Native StyleSheet, absolutely no Tailwind CSS or inline generic styles.",
+    "Use React Native Expo SDK 54.",
+    "The Roof Audit Tool (Dachaufmaß) must use `react-native-svg` and render a top-down technical schematic, not a placeholder.",
+    "Use German localization for all texts (e.g., Dashboard, Kunden, Aufmaß, Projekte, Mehr, Länge, Breite, kWp, Abgeschlossen).",
+    "Follow the specified dark slate and solar amber color palette exactly.",
+    "Ensure input fields in the Roof Audit tool have clear unit suffixes (e.g., 'm', 'cm').",
+    "All interactive elements MUST have a `testID` attribute mapping to `data-testid` conventions (e.g., `testID='login-form-submit-button'`)."
+  ],
+  "image_urls": {
+    "hero_background": {
+      "url": "https://images.unsplash.com/photo-1726866492047-7f9516558c6e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwzfHxzb2xhciUyMHBhbmVsJTIwcm9vZiUyMGluZHVzdHJpYWx8ZW58MHx8fHwxNzc2NzE4MTY0fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Aerial view of a parking lot with solar panels, use for login screen background or dashboard header with a heavy dark slate overlay (opacity 0.8)."
+    },
+    "engineer_avatar": {
+      "url": "https://images.pexels.com/photos/36453960/pexels-photo-36453960.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Professional engineer avatar, use in the side menu or dashboard profile."
+    },
+    "roof_example": {
+      "url": "https://images.unsplash.com/photo-1714939825216-1663f2cc4b0b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzh8MHwxfHNlYXJjaHwxfHxob3VzZSUyMHJvb2YlMjB0b3AlMjBkb3duJTIwZHJvbmV8ZW58MHx8fHwxNzc2NzE4MTY0fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Top down drone view of a house roof. Use as a reference image in the Photo Documentation / Roof Audit section."
+    }
+  }
+}
