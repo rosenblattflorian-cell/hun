@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, typography, spacing } from "../../src/theme";
 import { apiGet, apiPost } from "../../src/api";
@@ -17,6 +17,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export default function Projekte() {
+  const router = useRouter();
   const [items, setItems] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [modal, setModal] = useState(false);
@@ -52,7 +53,7 @@ export default function Projekte() {
             </View>
           )}
           renderItem={({ item }) => (
-            <View style={s.card}>
+            <TouchableOpacity style={s.card} onPress={() => router.push(`/project/${item.id}`)} testID={`project-${item.id}`}>
               <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                 <Text style={s.title}>{item.title}</Text>
                 <View style={[s.badge, { borderColor: STATUS_COLOR[item.status], backgroundColor: `${STATUS_COLOR[item.status]}25` }]}>
@@ -75,7 +76,7 @@ export default function Projekte() {
                 {item.kwp ? <Text style={s.stat}>{item.kwp} kWp</Text> : null}
                 {item.value ? <Text style={[s.stat, { color: colors.secondary }]}>€ {item.value.toLocaleString("de-DE")}</Text> : null}
               </View>
-            </View>
+            </TouchableOpacity>
           )}
         />
       )}

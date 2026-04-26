@@ -134,12 +134,60 @@ class ProjectCreate(BaseModel):
 
 class AppointmentCreate(BaseModel):
     customer_id: Optional[str] = None
+    project_id: Optional[str] = None
     title: str
     date: str  # ISO
     duration_minutes: int = 60
-    assigned_to: Optional[str] = None  # user id
-    type: Literal["besichtigung","installation","wartung","kundentermin"] = "kundentermin"
+    assigned_to: Optional[str] = None
+    type: Literal["installation","survey","service","internal"] = "installation"
+    status: Literal["planned","in_progress","done","cancelled"] = "planned"
+    location: Optional[str] = ""
     notes: Optional[str] = ""
+
+class AppointmentUpdate(BaseModel):
+    title: Optional[str] = None
+    date: Optional[str] = None
+    status: Optional[str] = None
+    type: Optional[str] = None
+    notes: Optional[str] = None
+    assigned_to: Optional[str] = None
+    location: Optional[str] = None
+
+class TaskCreate(BaseModel):
+    project_id: str
+    title: str
+    description: Optional[str] = ""
+    assigned_to: Optional[str] = None
+    status: Literal["todo","in_progress","done"] = "todo"
+    priority: Literal["low","medium","high"] = "medium"
+    due_date: Optional[str] = None
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assigned_to: Optional[str] = None
+    due_date: Optional[str] = None
+
+class SiteLogCreate(BaseModel):
+    project_id: str
+    appointment_id: Optional[str] = None
+    log_date: str  # ISO date
+    weather: Optional[str] = ""
+    work_done: str
+    issues: Optional[str] = ""
+    next_steps: Optional[str] = ""
+    safety_notes: Optional[str] = ""
+    workers_count: Optional[int] = None
+
+class PhotoCreate(BaseModel):
+    project_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    site_log_id: Optional[str] = None
+    title: Optional[str] = ""
+    image_base64: str  # data:image/jpeg;base64,...
+    caption: Optional[str] = ""
 
 class AIChatMessage(BaseModel):
     session_id: str
@@ -426,9 +474,86 @@ async def list_appointments(user: dict = Depends(get_current_user)):
         items.append(a)
     return items
 
+@api.patch("/appointments/{aid}")
+async def update_appointment(aid: str, data: AppointmentUpdate, user: dict = Depends(get_current_user)):
+    upd = {k: v for k, v in data.dict().items() if v is not None}
+    if upd:
+        await db.appointments.update_one({"id": aid}, {"$set": upd})
+    a = await db.appointments.find_one({"id": aid}, {"_id": 0})
+    return a
+
 @api.delete("/appointments/{aid}")
 async def delete_appointment(aid: str, user: dict = Depends(get_current_user)):
     await db.appointments.delete_one({"id": aid})
+    return {"ok": True}
+
+# ------------------- Tasks -------------------
+@api.post("/tasks")
+async def create_task(data: TaskCreate, user: dict = Depends(get_current_user)):
+    tid = str(uuid.uuid4())
+    doc = {"id": tid, **data.dict(), "created_at": now_iso(), "created_by": user["id"]}
+    await db.tasks.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/tasks")
+async def list_tasks(project_id: Optional[str] = None, status: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {}
+    if project_id: q["project_id"] = project_id
+    if status: q["status"] = status
+    return [t async for t in db.tasks.find(q, {"_id": 0}).sort("created_at", -1)]
+
+@api.patch("/tasks/{tid}")
+async def update_task(tid: str, data: TaskUpdate, user: dict = Depends(get_current_user)):
+    upd = {k: v for k, v in data.dict().items() if v is not None}
+    if upd: await db.tasks.update_one({"id": tid}, {"$set": upd})
+    t = await db.tasks.find_one({"id": tid}, {"_id": 0})
+    return t
+
+@api.delete("/tasks/{tid}")
+async def delete_task(tid: str, user: dict = Depends(get_current_user)):
+    await db.tasks.delete_one({"id": tid})
+    return {"ok": True}
+
+# ------------------- Site Logs (Bautagebuch) -------------------
+@api.post("/site-logs")
+async def create_site_log(data: SiteLogCreate, user: dict = Depends(get_current_user)):
+    sid = str(uuid.uuid4())
+    doc = {"id": sid, **data.dict(), "created_at": now_iso(), "created_by": user["id"], "created_by_name": user["name"]}
+    await db.site_logs.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/site-logs")
+async def list_site_logs(project_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {}
+    if project_id: q["project_id"] = project_id
+    return [s async for s in db.site_logs.find(q, {"_id": 0}).sort("log_date", -1)]
+
+@api.delete("/site-logs/{sid}")
+async def delete_site_log(sid: str, user: dict = Depends(get_current_user)):
+    await db.site_logs.delete_one({"id": sid})
+    return {"ok": True}
+
+# ------------------- Photos -------------------
+@api.post("/photos")
+async def create_photo(data: PhotoCreate, user: dict = Depends(get_current_user)):
+    pid = str(uuid.uuid4())
+    doc = {"id": pid, **data.dict(), "created_at": now_iso(), "created_by": user["id"]}
+    await db.photos.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/photos")
+async def list_photos(project_id: Optional[str] = None, customer_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {}
+    if project_id: q["project_id"] = project_id
+    if customer_id: q["customer_id"] = customer_id
+    return [p async for p in db.photos.find(q, {"_id": 0}).sort("created_at", -1)]
+
+@api.delete("/photos/{pid}")
+async def delete_photo(pid: str, user: dict = Depends(get_current_user)):
+    await db.photos.delete_one({"id": pid})
     return {"ok": True}
 
 # ------------------- AI Assistant -------------------
