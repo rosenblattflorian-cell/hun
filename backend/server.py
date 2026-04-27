@@ -18,6 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from seed_inventory import build_seed_data, build_compatibilities
+from photo_audit import measure_roof, detect_obstacles
 
 # ------------------- DB -------------------
 mongo_url = os.environ['MONGO_URL']
@@ -619,6 +620,67 @@ async def ai_history(session_id: str, user: dict = Depends(get_current_user)):
     async for m in db.ai_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1):
         items.append(m)
     return items
+
+# ------------------- Photo-Aufmaß (Computer Vision) -------------------
+class PhotoMeasureRequest(BaseModel):
+    image_base64: str
+    quad_points: List[List[float]]            # 4 Punkte [x,y]
+    reference_pair: List[int]                  # [a_idx, b_idx]
+    reference_meters: float
+    obstacles: Optional[List[List[List[float]]]] = None
+    snap: bool = True
+    save_for_customer_id: Optional[str] = None
+    title: Optional[str] = "Foto-Aufmaß"
+
+class PhotoDetectRequest(BaseModel):
+    image_base64: str
+
+@api.post("/photo-audit/detect-obstacles")
+async def api_detect_obstacles(req: PhotoDetectRequest, user: dict = Depends(get_current_user)):
+    try:
+        candidates = detect_obstacles(req.image_base64)
+        return {"candidates": candidates, "count": len(candidates)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("detect_obstacles failed")
+        raise HTTPException(500, f"Erkennung fehlgeschlagen: {e}")
+
+@api.post("/photo-audit/measure")
+async def api_measure_roof(req: PhotoMeasureRequest, user: dict = Depends(get_current_user)):
+    try:
+        result = measure_roof(
+            req.image_base64,
+            req.quad_points,
+            (req.reference_pair[0], req.reference_pair[1]),
+            req.reference_meters,
+            req.obstacles,
+            req.snap,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("measure_roof failed")
+        raise HTTPException(500, f"Berechnung fehlgeschlagen: {e}")
+
+    # optional speichern als Photo-Audit-Datensatz (separat von normalen roof_audits)
+    if req.save_for_customer_id:
+        doc = {
+            "id": str(uuid.uuid4()),
+            "customer_id": req.save_for_customer_id,
+            "title": req.title or "Foto-Aufmaß",
+            "type": "photo",
+            "dimensions": result["dimensions"],
+            "obstacle_area_m2": result["obstacle_area_m2"],
+            "usable_area_m2": result["usable_area_m2"],
+            "reference_meters": req.reference_meters,
+            "created_at": now_iso(),
+            "created_by": user["id"],
+        }
+        await db.photo_audits.insert_one(doc)
+        result["saved_id"] = doc["id"]
+
+    return result
 
 # ------------------- Inventory -------------------
 INV_TYPE_TO_COLL = {
