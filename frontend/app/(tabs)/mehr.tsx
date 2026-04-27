@@ -62,6 +62,21 @@ export default function Mehr() {
         </TouchableOpacity>
 
         <TouchableOpacity
+          testID="open-planning"
+          style={s.item}
+          onPress={() => (require("expo-router").router as any).push("/planning")}
+        >
+          <View style={[s.iconBox, { backgroundColor: `${colors.primary}22`, borderColor: colors.primary }]}>
+            <Ionicons name="grid" size={20} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.itemT}>PV-Layout & Stückliste</Text>
+            <Text style={s.itemS}>Multi-Brand · SolarEdge · Hoymiles · Sigenergy</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
           testID="open-photo-audit"
           style={s.item}
           onPress={() => (require("expo-router").router as any).push("/photo-audit")}

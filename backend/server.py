@@ -18,7 +18,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from seed_inventory import build_seed_data, build_compatibilities
+from seed_inventory_v2 import get_extension_data, build_extension_compatibilities
 from photo_audit import measure_roof, detect_obstacles
+from planning_engine import plan_full
 
 # ------------------- DB -------------------
 mongo_url = os.environ['MONGO_URL']
@@ -621,6 +623,39 @@ async def ai_history(session_id: str, user: dict = Depends(get_current_user)):
         items.append(m)
     return items
 
+# ------------------- PV Planning Engine -------------------
+class PlanningRequest(BaseModel):
+    roof_width_m: float
+    roof_height_m: float
+    obstacles_m: List[List[List[float]]] = Field(default_factory=list)
+    module_length_m: float = 1.722
+    module_width_m: float = 1.134
+    module_power_w: int = 440
+    inverter_system: Literal["string", "hybrid", "micro_hoymiles", "optimized_solaredge"] = "string"
+    orientation: Literal["portrait", "landscape"] = "portrait"
+    edge_margin_m: float = 0.3
+    sigenergy_battery_kwh: Optional[float] = None
+
+@api.post("/planning/generate")
+async def api_plan(req: PlanningRequest, user: dict = Depends(get_current_user)):
+    try:
+        result = plan_full(
+            roof_width_m=req.roof_width_m,
+            roof_height_m=req.roof_height_m,
+            obstacles_m=req.obstacles_m,
+            module={"length_m": req.module_length_m, "width_m": req.module_width_m, "power_w": req.module_power_w},
+            inverter_system=req.inverter_system,
+            orientation=req.orientation,
+            edge_margin_m=req.edge_margin_m,
+            sigenergy_battery_kwh=req.sigenergy_battery_kwh,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("planning failed")
+        raise HTTPException(500, f"Planungs-Fehler: {e}")
+
 # ------------------- Photo-Aufmaß (Computer Vision) -------------------
 class PhotoMeasureRequest(BaseModel):
     image_base64: str
@@ -827,6 +862,22 @@ async def startup():
         edges = build_compatibilities(seed)
         if edges: await db.inv_compatibilities.insert_many(edges)
         logger.info(f"Seeded inventory: {sum(len(v) for v in seed.values())} Artikel + {len(edges)} Kompatibilitäten")
+
+    # V2 Erweiterung idempotent (nur neue SKUs)
+    seed_v1 = build_seed_data()  # für Compat-Verknüpfung
+    ext = get_extension_data()
+    added = 0
+    for cat_key, coll_name in [("modules","inv_solar_modules"),("inverters","inv_inverters"),("screws","inv_screws")]:
+        for item in ext.get(cat_key, []):
+            if not await db[coll_name].find_one({"sku": item["sku"]}):
+                await db[coll_name].insert_one(item)
+                added += 1
+    if added > 0:
+        # Compat-Edges nur einfügen wenn neue Artikel hinzugekommen sind
+        ext_edges = build_extension_compatibilities(seed_v1, ext)
+        if ext_edges:
+            await db.inv_compatibilities.insert_many(ext_edges)
+        logger.info(f"V2 Erweiterung: {added} neue Artikel, {len(ext_edges)} neue Kompatibilitäten")
 
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@solar-mitte.de").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
