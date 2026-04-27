@@ -17,6 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from seed_inventory import build_seed_data, build_compatibilities
 
 # ------------------- DB -------------------
 mongo_url = os.environ['MONGO_URL']
@@ -619,6 +620,123 @@ async def ai_history(session_id: str, user: dict = Depends(get_current_user)):
         items.append(m)
     return items
 
+# ------------------- Inventory -------------------
+INV_TYPE_TO_COLL = {
+    "modules": "inv_solar_modules",
+    "inverters": "inv_inverters",
+    "batteries": "inv_batteries",
+    "rails": "inv_mounting_rails",
+    "hooks": "inv_roof_hooks",
+    "screws": "inv_screws",
+}
+INV_TYPE_SINGULAR = {
+    "modules": "solar_module", "inverters": "inverter", "batteries": "battery",
+    "rails": "mounting_rail", "hooks": "roof_hook", "screws": "screw",
+}
+SINGULAR_TO_PLURAL = {v: k for k, v in INV_TYPE_SINGULAR.items()}
+
+@api.get("/inventory/{cat}")
+async def list_inventory(cat: str, search: Optional[str] = None, manufacturer: Optional[str] = None,
+                         user: dict = Depends(get_current_user)):
+    coll = INV_TYPE_TO_COLL.get(cat)
+    if not coll: raise HTTPException(404, "Unbekannte Kategorie")
+    q: dict = {}
+    if manufacturer: q["manufacturer"] = manufacturer
+    if search:
+        q["$or"] = [
+            {"manufacturer": {"$regex": search, "$options": "i"}},
+            {"model": {"$regex": search, "$options": "i"}},
+            {"sku": {"$regex": search, "$options": "i"}},
+        ]
+    return [d async for d in db[coll].find(q, {"_id": 0}).sort("manufacturer", 1)]
+
+@api.get("/inventory/{cat}/{item_id}")
+async def get_inventory_item(cat: str, item_id: str, user: dict = Depends(get_current_user)):
+    coll = INV_TYPE_TO_COLL.get(cat)
+    if not coll: raise HTTPException(404, "Unbekannte Kategorie")
+    d = await db[coll].find_one({"id": item_id}, {"_id": 0})
+    if not d: raise HTTPException(404, "Artikel nicht gefunden")
+    # Kompatibilitäten anhängen (beide Richtungen)
+    sing = INV_TYPE_SINGULAR[cat]
+    edges = []
+    async for e in db.inv_compatibilities.find(
+        {"$or": [{"source_id": item_id}, {"target_id": item_id}]}, {"_id": 0}):
+        edges.append(e)
+    # Anreichern mit Partner-Datensatz
+    enriched: list = []
+    for e in edges:
+        is_src = e.get("source_id") == item_id
+        partner_type = e["target_type"] if is_src else e["source_type"]
+        partner_id = e.get("target_id") if is_src else e.get("source_id")
+        partner_key = e.get("target_key") if is_src else e.get("source_key")
+        partner = None
+        if partner_id and partner_type in SINGULAR_TO_PLURAL:
+            pcoll = INV_TYPE_TO_COLL[SINGULAR_TO_PLURAL[partner_type]]
+            partner = await db[pcoll].find_one({"id": partner_id}, {"_id": 0})
+        enriched.append({
+            "edge_id": e["id"], "relation": e["relation"],
+            "rule_context": e.get("rule_context"), "certified_by": e.get("certified_by"),
+            "direction": "outgoing" if is_src else "incoming",
+            "partner_type": partner_type, "partner_id": partner_id,
+            "partner_key": partner_key, "partner": partner,
+        })
+    return {**d, "compatibilities": enriched}
+
+@api.post("/inventory/{cat}")
+async def create_inventory(cat: str, payload: dict, user: dict = Depends(get_current_user)):
+    coll = INV_TYPE_TO_COLL.get(cat)
+    if not coll: raise HTTPException(404, "Unbekannte Kategorie")
+    payload["id"] = payload.get("id") or str(uuid.uuid4())
+    payload["created_at"] = now_iso()
+    payload["updated_at"] = now_iso()
+    await db[coll].insert_one(payload)
+    payload.pop("_id", None)
+    return payload
+
+@api.patch("/inventory/{cat}/{item_id}")
+async def update_inventory(cat: str, item_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    coll = INV_TYPE_TO_COLL.get(cat)
+    if not coll: raise HTTPException(404, "Unbekannte Kategorie")
+    payload["updated_at"] = now_iso()
+    await db[coll].update_one({"id": item_id}, {"$set": payload})
+    d = await db[coll].find_one({"id": item_id}, {"_id": 0})
+    return d
+
+@api.delete("/inventory/{cat}/{item_id}")
+async def delete_inventory(cat: str, item_id: str, user: dict = Depends(get_current_user)):
+    coll = INV_TYPE_TO_COLL.get(cat)
+    if not coll: raise HTTPException(404, "Unbekannte Kategorie")
+    await db[coll].delete_one({"id": item_id})
+    # Verwaiste Edges entfernen
+    await db.inv_compatibilities.delete_many({"$or": [{"source_id": item_id}, {"target_id": item_id}]})
+    return {"ok": True}
+
+@api.get("/inventory")
+async def inventory_summary(user: dict = Depends(get_current_user)):
+    out = {}
+    for cat, coll in INV_TYPE_TO_COLL.items():
+        out[cat] = await db[coll].count_documents({})
+    out["compatibilities"] = await db.inv_compatibilities.count_documents({})
+    return out
+
+# ------------------- Compatibility -------------------
+@api.get("/compatibilities")
+async def list_compat(user: dict = Depends(get_current_user)):
+    return [e async for e in db.inv_compatibilities.find({}, {"_id": 0}).sort("created_at", -1)]
+
+@api.post("/compatibilities")
+async def create_compat(payload: dict, user: dict = Depends(get_current_user)):
+    payload["id"] = payload.get("id") or str(uuid.uuid4())
+    payload["created_at"] = now_iso()
+    await db.inv_compatibilities.insert_one(payload)
+    payload.pop("_id", None)
+    return payload
+
+@api.delete("/compatibilities/{eid}")
+async def delete_compat(eid: str, user: dict = Depends(get_current_user)):
+    await db.inv_compatibilities.delete_one({"id": eid})
+    return {"ok": True}
+
 # ------------------- Startup -------------------
 @app.on_event("startup")
 async def startup():
@@ -627,6 +745,26 @@ async def startup():
     await db.roof_audits.create_index("customer_id")
     await db.projects.create_index("customer_id")
     await db.appointments.create_index("date")
+
+    # Inventory-Indizes
+    for coll in ["inv_solar_modules","inv_inverters","inv_batteries","inv_mounting_rails","inv_roof_hooks","inv_screws"]:
+        await db[coll].create_index("sku", unique=True)
+        await db[coll].create_index("manufacturer")
+    await db.inv_compatibilities.create_index([("source_type", 1), ("source_id", 1)])
+    await db.inv_compatibilities.create_index([("target_type", 1), ("target_id", 1)])
+
+    # Inventar seeden, falls leer
+    if await db.inv_solar_modules.count_documents({}) == 0:
+        seed = build_seed_data()
+        if seed["modules"]: await db.inv_solar_modules.insert_many(seed["modules"])
+        if seed["inverters"]: await db.inv_inverters.insert_many(seed["inverters"])
+        if seed["batteries"]: await db.inv_batteries.insert_many(seed["batteries"])
+        if seed["rails"]: await db.inv_mounting_rails.insert_many(seed["rails"])
+        if seed["hooks"]: await db.inv_roof_hooks.insert_many(seed["hooks"])
+        if seed["screws"]: await db.inv_screws.insert_many(seed["screws"])
+        edges = build_compatibilities(seed)
+        if edges: await db.inv_compatibilities.insert_many(edges)
+        logger.info(f"Seeded inventory: {sum(len(v) for v in seed.values())} Artikel + {len(edges)} Kompatibilitäten")
 
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@solar-mitte.de").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")

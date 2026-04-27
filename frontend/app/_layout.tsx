@@ -40,6 +40,8 @@ export default function RootLayout() {
             <Stack.Screen name="customer/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="project/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="calendar" options={{ presentation: "card" }} />
+            <Stack.Screen name="inventory/index" options={{ presentation: "card" }} />
+            <Stack.Screen name="inventory/[cat]/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="audit/new" options={{ presentation: "modal" }} />
           </Stack>
         </Gate>

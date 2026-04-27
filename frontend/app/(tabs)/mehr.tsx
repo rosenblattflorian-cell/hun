@@ -61,6 +61,36 @@ export default function Mehr() {
           <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
 
+        <TouchableOpacity
+          testID="open-inventory"
+          style={s.item}
+          onPress={() => (require("expo-router").router as any).push("/inventory")}
+        >
+          <View style={[s.iconBox, { backgroundColor: `${colors.secondary}22`, borderColor: colors.secondary }]}>
+            <Ionicons name="cube" size={20} color={colors.secondary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.itemT}>Inventar</Text>
+            <Text style={s.itemS}>Module · Wechselrichter · Speicher · K2 · Kompatibilitäten</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          testID="open-calendar"
+          style={s.item}
+          onPress={() => (require("expo-router").router as any).push("/calendar")}
+        >
+          <View style={[s.iconBox, { backgroundColor: `${colors.info}22`, borderColor: colors.info }]}>
+            <Ionicons name="calendar" size={20} color={colors.info} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.itemT}>Kalender & Termine</Text>
+            <Text style={s.itemS}>Tag · Woche · Liste · Bautagebuch</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+
         <TouchableOpacity style={s.item} onPress={() => setView("ai")} testID="open-ai-chat">
           <View style={[s.iconBox, { backgroundColor: `${colors.primary}22`, borderColor: colors.primary }]}>
             <Ionicons name="sparkles" size={20} color={colors.primary} />
