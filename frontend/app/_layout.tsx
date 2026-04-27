@@ -42,6 +42,7 @@ export default function RootLayout() {
             <Stack.Screen name="calendar" options={{ presentation: "card" }} />
             <Stack.Screen name="photo-audit" options={{ presentation: "card" }} />
             <Stack.Screen name="planning" options={{ presentation: "card" }} />
+            <Stack.Screen name="quote/new" options={{ presentation: "card" }} />
             <Stack.Screen name="inventory/index" options={{ presentation: "card" }} />
             <Stack.Screen name="inventory/[cat]/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="audit/new" options={{ presentation: "modal" }} />

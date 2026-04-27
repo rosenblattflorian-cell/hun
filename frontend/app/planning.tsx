@@ -227,6 +227,23 @@ export default function Planning() {
                   <Text style={[s.bomTotalV, { color: colors.primary, fontSize: 22 }]}>€ {result.bom.total_net_with_vat_19.toLocaleString("de-DE", { minimumFractionDigits: 2 })}</Text>
                 </View>
               </View>
+
+              <TouchableOpacity
+                testID="open-quote-wizard"
+                onPress={() => {
+                  const layoutP = encodeURIComponent(JSON.stringify(result.layout));
+                  const bomP = encodeURIComponent(JSON.stringify(result.bom));
+                  router.push(`/quote/new?layout=${layoutP}&bom=${bomP}` as any);
+                }}
+                style={[s.aiQuoteBtn]}
+              >
+                <Ionicons name="sparkles" size={20} color="#000" />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.aiQuoteT}>Angebot mit KI generieren</Text>
+                  <Text style={s.aiQuoteS}>Claude strukturiert · PDF-Download · Solar-Mitte-Branding</Text>
+                </View>
+                <Ionicons name="arrow-forward" size={18} color="#000" />
+              </TouchableOpacity>
             </>
           )}
         </ScrollView>
@@ -311,4 +328,7 @@ const s = StyleSheet.create({
   bomTotal: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, paddingTop: 12, borderTopWidth: 2, borderTopColor: colors.primary },
   bomTotalL: { color: colors.textSecondary, fontSize: 12, fontWeight: "800", letterSpacing: 1 },
   bomTotalV: { color: colors.textPrimary, fontSize: 18, fontWeight: "800" },
+  aiQuoteBtn: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: colors.primary, marginTop: 16 },
+  aiQuoteT: { color: "#000", fontWeight: "800", fontSize: 15 },
+  aiQuoteS: { color: "rgba(0,0,0,0.7)", fontSize: 11, marginTop: 2 },
 });

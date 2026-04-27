@@ -21,6 +21,8 @@ from seed_inventory import build_seed_data, build_compatibilities
 from seed_inventory_v2 import get_extension_data, build_extension_compatibilities
 from photo_audit import measure_roof, detect_obstacles
 from planning_engine import plan_full
+from quotes import structure_quote_with_ai, generate_quote_pdf
+from fastapi.responses import Response
 
 # ------------------- DB -------------------
 mongo_url = os.environ['MONGO_URL']
@@ -622,6 +624,144 @@ async def ai_history(session_id: str, user: dict = Depends(get_current_user)):
     async for m in db.ai_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1):
         items.append(m)
     return items
+
+# ------------------- Companies -------------------
+class CompanyUpsert(BaseModel):
+    name: str = "Solar Mitte GmbH"
+    legal_name: Optional[str] = "Solar Mitte GmbH"
+    tagline: Optional[str] = "Photovoltaik · Speicher · Wallbox"
+    street: Optional[str] = "Energieplatz 1"
+    zip_code: Optional[str] = "10115"
+    city: Optional[str] = "Berlin"
+    phone: Optional[str] = "+49 30 1234567"
+    email: Optional[str] = "info@solar-mitte.de"
+    website: Optional[str] = "www.solar-mitte.de"
+    tax_id: Optional[str] = "11/123/45678"
+    vat_id: Optional[str] = "DE123456789"
+    trade_register: Optional[str] = "HRB 12345 B"
+    bank_name: Optional[str] = "Deutsche Bank Berlin"
+    iban: Optional[str] = "DE12 1007 0024 0123 4567 89"
+    bic: Optional[str] = "DEUTDEDBBER"
+
+@api.get("/company")
+async def get_company(user: dict = Depends(get_current_user)):
+    c = await db.companies.find_one({"id": "default"}, {"_id": 0})
+    if not c:
+        # Lazy seed
+        c = {"id": "default", **CompanyUpsert().dict(), "created_at": now_iso()}
+        await db.companies.insert_one(c)
+        c.pop("_id", None)
+    return c
+
+@api.put("/company")
+async def update_company(data: CompanyUpsert, user: dict = Depends(get_current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Nur Admin darf Firmendaten ändern")
+    upd = data.dict()
+    await db.companies.update_one({"id": "default"}, {"$set": upd}, upsert=True)
+    return await db.companies.find_one({"id": "default"}, {"_id": 0})
+
+# ------------------- Quotes (KI + PDF) -------------------
+class QuoteGenerateRequest(BaseModel):
+    customer_id: str
+    layout: dict
+    bom: dict
+    extras: Optional[str] = ""               # "Wallbox 11 kW hinzufügen"
+    discount_request: Optional[str] = ""     # "5% auf Montage"
+
+@api.post("/quotes/generate")
+async def quote_generate(req: QuoteGenerateRequest, user: dict = Depends(get_current_user)):
+    customer = await db.customers.find_one({"id": req.customer_id}, {"_id": 0})
+    if not customer:
+        raise HTTPException(404, "Kunde nicht gefunden")
+    try:
+        structured = await structure_quote_with_ai(
+            bom=req.bom, layout=req.layout, customer=customer, user=user,
+            extras=req.extras, discount_request=req.discount_request,
+            api_key=EMERGENT_LLM_KEY, session_id=f"quote-{user['id']}-{req.customer_id}"
+        )
+    except Exception as e:
+        logger.exception("AI structuring failed")
+        raise HTTPException(500, f"KI-Strukturierung fehlgeschlagen: {e}")
+
+    # kwp_label für Header
+    structured["kwp_label"] = f"{req.layout.get('kwp', 0):.2f} kWp"
+
+    # Quote-Nummer
+    seq = await db.quotes.count_documents({})
+    year = datetime.now(timezone.utc).year
+    quote_number = f"AB-{year}-{seq + 1:04d}"
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "quote_number": quote_number,
+        "customer_id": req.customer_id,
+        "customer_snapshot": customer,
+        "user_id": user["id"],
+        "user_snapshot": {"name": user["name"], "email": user["email"], "role": user["role"], "phone": user.get("phone")},
+        "structured": structured,
+        "layout": req.layout,
+        "bom": req.bom,
+        "extras": req.extras,
+        "discount_request": req.discount_request,
+        "total_net": structured.get("total_net"),
+        "total_gross": structured.get("total_gross"),
+        "created_at": now_iso(),
+    }
+    await db.quotes.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/quotes")
+async def list_quotes(customer_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {"customer_id": customer_id} if customer_id else {}
+    return [d async for d in db.quotes.find(q, {"_id": 0}).sort("created_at", -1)]
+
+@api.get("/quotes/{qid}")
+async def get_quote(qid: str, user: dict = Depends(get_current_user)):
+    d = await db.quotes.find_one({"id": qid}, {"_id": 0})
+    if not d: raise HTTPException(404, "Angebot nicht gefunden")
+    return d
+
+@api.get("/quotes/{qid}/pdf")
+async def quote_pdf(qid: str, request: Request, _t: Optional[str] = None,
+                    creds: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    # Fallback-Auth: ?_t=<token> als Query, damit Linking.openURL auf Native funktioniert
+    user = None
+    token = None
+    if creds and creds.credentials:
+        token = creds.credentials
+    if not token:
+        token = request.cookies.get("access_token")
+    if not token and _t:
+        token = _t
+    if not token:
+        raise HTTPException(401, "Nicht authentifiziert")
+    try:
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+        if not user: raise HTTPException(401, "Benutzer nicht gefunden")
+    except pyjwt.InvalidTokenError:
+        raise HTTPException(401, "Ungültiger Token")
+
+    d = await db.quotes.find_one({"id": qid}, {"_id": 0})
+    if not d: raise HTTPException(404, "Angebot nicht gefunden")
+    company = await db.companies.find_one({"id": "default"}, {"_id": 0})
+    if not company:
+        company = {"id": "default", **CompanyUpsert().dict()}
+        await db.companies.insert_one(company)
+        company.pop("_id", None)
+    pdf_bytes = generate_quote_pdf(
+        quote=d["structured"],
+        customer=d["customer_snapshot"],
+        user=d["user_snapshot"],
+        company=company,
+        quote_number=d["quote_number"],
+    )
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="Angebot_{d["quote_number"]}.pdf"'}
+    )
 
 # ------------------- PV Planning Engine -------------------
 class PlanningRequest(BaseModel):
