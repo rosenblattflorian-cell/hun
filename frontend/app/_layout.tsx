@@ -14,8 +14,16 @@ function Gate({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (user === undefined) return;
     const inAuth = segments[0] === "login";
+    const inMonteur = segments[0] === "monteur";
     if (!user && !inAuth) router.replace("/login");
-    else if (user && inAuth) router.replace("/(tabs)/dashboard");
+    else if (user && inAuth) {
+      // Rollen-basierter Redirect nach Login
+      if (user.role === "monteur") router.replace("/monteur");
+      else router.replace("/(tabs)/dashboard");
+    } else if (user && user.role === "monteur" && !inMonteur) {
+      // Monteur darf nur Monteur-Bereich sehen
+      router.replace("/monteur");
+    }
   }, [user, segments]);
 
   if (user === undefined) {
@@ -43,6 +51,8 @@ export default function RootLayout() {
             <Stack.Screen name="photo-audit" options={{ presentation: "card" }} />
             <Stack.Screen name="planning" options={{ presentation: "card" }} />
             <Stack.Screen name="quote/new" options={{ presentation: "card" }} />
+            <Stack.Screen name="monteur/index" options={{ presentation: "card" }} />
+            <Stack.Screen name="monteur/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="inventory/index" options={{ presentation: "card" }} />
             <Stack.Screen name="inventory/[cat]/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="audit/new" options={{ presentation: "modal" }} />

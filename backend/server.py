@@ -22,6 +22,7 @@ from seed_inventory_v2 import get_extension_data, build_extension_compatibilitie
 from photo_audit import measure_roof, detect_obstacles
 from planning_engine import plan_full
 from quotes import structure_quote_with_ai, generate_quote_pdf
+from installer import bom_to_checklist_items, generate_protocol_pdf, PHASE_LABEL
 from fastapi.responses import Response
 
 # ------------------- DB -------------------
@@ -625,6 +626,225 @@ async def ai_history(session_id: str, user: dict = Depends(get_current_user)):
         items.append(m)
     return items
 
+# ------------------- Monteur (Field-Service) -------------------
+class ChecklistGenerateRequest(BaseModel):
+    project_id: str
+    bom: dict
+    layout: Optional[dict] = None
+
+@api.post("/monteur/checklists/generate")
+async def gen_checklist(req: ChecklistGenerateRequest, user: dict = Depends(get_current_user)):
+    items = bom_to_checklist_items(req.bom)
+    cid = str(uuid.uuid4())
+    doc = {
+        "id": cid, "project_id": req.project_id,
+        "items": items, "bom_snapshot": req.bom, "layout_snapshot": req.layout,
+        "created_at": now_iso(), "created_by": user["id"],
+    }
+    # one checklist per project — overwrite if exists
+    await db.checklists.delete_many({"project_id": req.project_id})
+    await db.checklists.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/monteur/checklists/{project_id}")
+async def get_checklist(project_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.checklists.find_one({"project_id": project_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Keine Checkliste — bitte aus Planung generieren")
+    return doc
+
+class ChecklistItemUpdate(BaseModel):
+    seq: int
+    status: Literal["todo", "done"]
+
+@api.patch("/monteur/checklists/{project_id}/item")
+async def patch_item(project_id: str, data: ChecklistItemUpdate, user: dict = Depends(get_current_user)):
+    cl = await db.checklists.find_one({"project_id": project_id})
+    if not cl: raise HTTPException(404, "Checkliste nicht gefunden")
+    items = cl["items"]
+    for it in items:
+        if it["seq"] == data.seq:
+            it["status"] = data.status
+            it["checked_at"] = now_iso() if data.status == "done" else None
+            it["checked_by"] = user["name"] if data.status == "done" else None
+            break
+    await db.checklists.update_one({"project_id": project_id}, {"$set": {"items": items}})
+    return {"ok": True}
+
+# Site-Photos with GPS + phase
+class SitePhotoCreate(BaseModel):
+    project_id: str
+    image_base64: str
+    title: Optional[str] = ""
+    phase: str = "doku"  # ladung|uk|module|elektrik|netz|doku
+    gps_lat: Optional[float] = None
+    gps_lng: Optional[float] = None
+    gps_accuracy: Optional[float] = None
+
+@api.post("/monteur/site-photos")
+async def create_site_photo(data: SitePhotoCreate, user: dict = Depends(get_current_user)):
+    pid = str(uuid.uuid4())
+    doc = {
+        "id": pid,
+        "project_id": data.project_id,
+        "image_base64": data.image_base64,
+        "title": data.title or f"Foto {datetime.now(timezone.utc).strftime('%d.%m. %H:%M')}",
+        "phase": data.phase,
+        "gps": {"lat": data.gps_lat, "lng": data.gps_lng, "accuracy": data.gps_accuracy} if data.gps_lat else None,
+        "created_at": now_iso(),
+        "created_by": user["id"],
+        "created_by_name": user["name"],
+        "ai_check": None,
+    }
+    await db.site_photos.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/monteur/site-photos")
+async def list_site_photos(project_id: str, user: dict = Depends(get_current_user)):
+    items = []
+    async for p in db.site_photos.find({"project_id": project_id}, {"_id": 0}).sort("created_at", -1):
+        items.append(p)
+    return items
+
+@api.delete("/monteur/site-photos/{pid}")
+async def del_site_photo(pid: str, user: dict = Depends(get_current_user)):
+    await db.site_photos.delete_one({"id": pid})
+    return {"ok": True}
+
+@api.post("/monteur/site-photos/{pid}/ai-check")
+async def site_photo_ai_check(pid: str, user: dict = Depends(get_current_user)):
+    """MOCKED: Plausibilitäts-Check für Foto-Inhalt.
+    Eine echte Vision-Verifizierung würde Claude Vision oder ein YOLO-Modell brauchen.
+    Wir liefern hier einen heuristischen Mock-Score basierend auf Phase + Bildgröße.
+    """
+    p = await db.site_photos.find_one({"id": pid}, {"_id": 0})
+    if not p: raise HTTPException(404, "Foto nicht gefunden")
+    img_size = len(p.get("image_base64", "")) // 1000  # KB
+    phase = p.get("phase", "doku")
+    # Mock: Confidence basierend auf Größe (große Bilder = mehr Detail)
+    conf = min(0.95, 0.5 + img_size / 1000)
+    expected = {
+        "module": "Modulreihen mit Klemmen sichtbar",
+        "elektrik": "Wechselrichter / Schaltanlage erwartet",
+        "netz": "Zählerschrank / Anschlussdose erwartet",
+        "uk": "Schienen und Dachhaken erwartet",
+        "doku": "Übersichtsbild oder Typenschild erwartet",
+        "ladung": "Materialladung auf LKW erwartet",
+    }.get(phase, "—")
+    result = {
+        "checked_at": now_iso(),
+        "confidence": round(conf, 2),
+        "expected": expected,
+        "verdict": "plausibel" if conf > 0.6 else "unklar",
+        "note": "Heuristischer Plausibilitäts-Check (MOCK — kein echtes Vision-Modell)",
+    }
+    await db.site_photos.update_one({"id": pid}, {"$set": {"ai_check": result}})
+    return result
+
+# Signatures
+class SignatureSave(BaseModel):
+    project_id: str
+    role: Literal["customer", "installer"]
+    name: str
+    strokes: Optional[List[List[List[float]]]] = None  # JSON Polylines
+    canvas_width: Optional[int] = 320
+    canvas_height: Optional[int] = 180
+    image_base64: Optional[str] = None  # Fallback
+
+@api.post("/monteur/signatures")
+async def save_signature(data: SignatureSave, user: dict = Depends(get_current_user)):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "project_id": data.project_id,
+        "role": data.role,
+        "name": data.name,
+        "strokes": data.strokes,
+        "canvas_width": data.canvas_width,
+        "canvas_height": data.canvas_height,
+        "image_base64": data.image_base64,
+        "signed_at": now_iso(),
+        "user_id": user["id"],
+    }
+    await db.signatures.delete_many({"project_id": data.project_id, "role": data.role})
+    await db.signatures.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.get("/monteur/signatures/{project_id}")
+async def get_signatures(project_id: str, user: dict = Depends(get_current_user)):
+    sigs = {}
+    async for s in db.signatures.find({"project_id": project_id}, {"_id": 0}):
+        sigs[s["role"]] = s
+    return sigs
+
+# Acceptance Protocol PDF
+@api.get("/monteur/protocols/{project_id}/pdf")
+async def protocol_pdf(project_id: str, request: Request, _t: Optional[str] = None,
+                       creds: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    # Same flexible auth as quote PDF
+    token = (creds.credentials if creds and creds.credentials else None) or request.cookies.get("access_token") or _t
+    if not token: raise HTTPException(401, "Nicht authentifiziert")
+    try:
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        u = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+        if not u: raise HTTPException(401, "User nicht gefunden")
+    except pyjwt.InvalidTokenError:
+        raise HTTPException(401, "Ungültiger Token")
+
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project: raise HTTPException(404, "Projekt nicht gefunden")
+    customer = await db.customers.find_one({"id": project.get("customer_id")}, {"_id": 0}) or {}
+    company = await db.companies.find_one({"id": "default"}, {"_id": 0})
+    if not company:
+        company = {"id": "default", **CompanyUpsert().dict()}
+        await db.companies.insert_one(company)
+        company.pop("_id", None)
+    cl = await db.checklists.find_one({"project_id": project_id}, {"_id": 0})
+    photos = [p async for p in db.site_photos.find({"project_id": project_id}, {"_id": 0}).sort("created_at", 1)]
+    sigs = {}
+    async for s in db.signatures.find({"project_id": project_id}, {"_id": 0}):
+        sigs[s["role"]] = s
+
+    pdf = generate_protocol_pdf(
+        project=project, customer=customer, company=company, user=u,
+        checklist=(cl or {}).get("items", []),
+        photos=photos,
+        layout=(cl or {}).get("layout_snapshot"),
+        bom=(cl or {}).get("bom_snapshot"),
+        signatures=sigs,
+    )
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="Abnahmeprotokoll_{project.get("title","Projekt")}.pdf"'})
+
+# Monteur Project Dashboard — listet alle Projekte mit Checklisten-Fortschritt
+@api.get("/monteur/projects")
+async def monteur_projects(user: dict = Depends(get_current_user)):
+    items = []
+    async for p in db.projects.find({}, {"_id": 0}).sort("created_at", -1):
+        if p.get("customer_id"):
+            c = await db.customers.find_one({"id": p["customer_id"]}, {"_id": 0, "name": 1, "city": 1})
+            p["customer_name"] = c["name"] if c else None
+            p["customer_city"] = c.get("city") if c else None
+        cl = await db.checklists.find_one({"project_id": p["id"]}, {"_id": 0, "items": 1})
+        if cl:
+            its = cl.get("items", [])
+            done = sum(1 for x in its if x.get("status") == "done")
+            p["progress_done"] = done
+            p["progress_total"] = len(its)
+            p["progress_pct"] = round(done / max(len(its), 1) * 100)
+        else:
+            p["progress_done"] = 0; p["progress_total"] = 0; p["progress_pct"] = 0
+        # Signatures
+        sigs = {}
+        async for s in db.signatures.find({"project_id": p["id"]}, {"_id": 0, "role": 1}):
+            sigs[s["role"]] = True
+        p["has_customer_sig"] = bool(sigs.get("customer"))
+        p["has_installer_sig"] = bool(sigs.get("installer"))
+        items.append(p)
+    return items
+
 # ------------------- Companies -------------------
 class CompanyUpsert(BaseModel):
     name: str = "Solar Mitte GmbH"
@@ -1039,6 +1259,15 @@ async def startup():
             "id": str(uuid.uuid4()), "email": vertrieb_email,
             "password_hash": hash_password("vertrieb123"),
             "name": "Max Mustermann", "role": "vertrieb", "created_at": now_iso()
+        })
+
+    # Seed monteur user
+    monteur_email = "monteur@solar-mitte.de"
+    if not await db.users.find_one({"email": monteur_email}):
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()), "email": monteur_email,
+            "password_hash": hash_password("monteur123"),
+            "name": "Tom Bauer", "role": "monteur", "phone": "+49 151 23456789", "created_at": now_iso()
         })
 
     # Seed demo customers if empty

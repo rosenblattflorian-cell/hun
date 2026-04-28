@@ -9,8 +9,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import Svg, { Polygon, Circle, Line, Rect, Text as SvgText, G } from "react-native-svg";
-import { colors, typography, spacing } from "../../src/theme";
-import { apiPost } from "../../src/api";
+import { colors, typography, spacing } from "../src/theme";
+import { apiPost } from "../src/api";
 
 type Pt = { x: number; y: number };
 
