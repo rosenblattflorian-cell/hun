@@ -145,13 +145,14 @@ def _fmt_qty(n: float) -> str:
     return f"{n:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-# Solar Mitte Brand Colors (an deine Vorlage angelehnt)
+# Solar Mitte Brand Colors (DIN-5008 konform)
 BRAND_GREEN = rl_colors.HexColor("#00C853")
+BRAND_GREEN_DARK = rl_colors.HexColor("#009624")
 BRAND_DARK = rl_colors.HexColor("#0A1628")
 BRAND_TEXT = rl_colors.HexColor("#1F2937")
 BRAND_MUTED = rl_colors.HexColor("#6B7280")
-BRAND_LIGHT_BG = rl_colors.HexColor("#F8FAFC")
-BRAND_BORDER = rl_colors.HexColor("#E5E7EB")
+BRAND_LIGHT_BG = rl_colors.HexColor("#F5F7FA")
+BRAND_BORDER = rl_colors.HexColor("#D1D5DB")
 
 
 def _header_footer(canvas: pdf_canvas.Canvas, doc, company: Dict[str, Any], user: Dict[str, Any]):
@@ -230,18 +231,18 @@ def generate_quote_pdf(
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=20 * mm, rightMargin=20 * mm,
-        topMargin=38 * mm, bottomMargin=32 * mm,
+        leftMargin=22 * mm, rightMargin=20 * mm,
+        topMargin=33 * mm, bottomMargin=30 * mm,
         title=f"Angebot {quote_number}",
         author=user.get("name", "Solar Mitte"),
     )
 
     styles = getSampleStyleSheet()
-    h_style = ParagraphStyle("h", parent=styles["Heading1"], fontSize=14, textColor=BRAND_DARK, spaceAfter=4 * mm)
-    sub_style = ParagraphStyle("sub", parent=styles["Heading3"], fontSize=11, textColor=BRAND_GREEN, spaceBefore=4 * mm, spaceAfter=2 * mm)
-    body_style = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9.5, leading=13, textColor=BRAND_TEXT, alignment=TA_JUSTIFY)
-    small_style = ParagraphStyle("sm", parent=styles["BodyText"], fontSize=8, textColor=BRAND_MUTED, leading=11)
-    addr_style = ParagraphStyle("addr", parent=styles["BodyText"], fontSize=10, leading=14, textColor=BRAND_TEXT)
+    h_style = ParagraphStyle("h", parent=styles["Heading1"], fontSize=16, textColor=BRAND_DARK, spaceAfter=3 * mm, fontName="Helvetica-Bold", leading=20)
+    sub_style = ParagraphStyle("sub", parent=styles["Heading3"], fontSize=10.5, textColor=BRAND_GREEN_DARK, spaceBefore=5 * mm, spaceAfter=2 * mm, fontName="Helvetica-Bold")
+    body_style = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9, leading=12.5, textColor=BRAND_TEXT, alignment=TA_JUSTIFY, fontName="Helvetica")
+    small_style = ParagraphStyle("sm", parent=styles["BodyText"], fontSize=7.5, textColor=BRAND_MUTED, leading=10.5, fontName="Helvetica")
+    addr_style = ParagraphStyle("addr", parent=styles["BodyText"], fontSize=9.5, leading=13, textColor=BRAND_TEXT, fontName="Helvetica")
 
     story: List[Any] = []
 
@@ -301,17 +302,20 @@ def generate_quote_pdf(
             ("BACKGROUND", (0, 0), (-1, 0), BRAND_DARK),
             ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+            ("FONTSIZE", (0, 0), (-1, 0), 8),
             ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
             ("ALIGN", (0, 0), (0, -1), "CENTER"),
             ("FONTSIZE", (0, 1), (-1, -1), 8.5),
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.white, BRAND_LIGHT_BG]),
-            ("LINEABOVE", (0, 0), (-1, 0), 1, BRAND_GREEN),
+            ("TEXTCOLOR", (0, 1), (-1, -1), BRAND_TEXT),
+            ("LINEBELOW", (0, 0), (-1, 0), 1.2, BRAND_GREEN),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.3, BRAND_BORDER),
+            ("LINEBELOW", (0, -1), (-1, -1), 0.3, BRAND_BORDER),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
             ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
         ]))
         story.append(t)
         story.append(Spacer(1, 3 * mm))

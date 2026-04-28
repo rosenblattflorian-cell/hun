@@ -94,6 +94,7 @@ export default function Login() {
               <Text style={styles.demoLine}>admin@solar-mitte.de / admin123</Text>
               <Text style={styles.demoLine}>vertrieb@solar-mitte.de / vertrieb123</Text>
               <Text style={styles.demoLine}>monteur@solar-mitte.de / monteur123</Text>
+              <Text style={styles.demoLine}>schmidt@example.de / kunde123</Text>
             </View>
           </View>
         </ScrollView>

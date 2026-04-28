@@ -80,11 +80,13 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 # ------------------- Models -------------------
+UserRole = Literal["admin", "vertrieb", "monteur", "planer", "customer"]
+
 class UserRegister(BaseModel):
     email: EmailStr
     password: str
     name: str
-    role: Literal["admin", "vertrieb", "monteur"] = "vertrieb"
+    role: Literal["admin", "vertrieb", "monteur", "planer", "customer"] = "vertrieb"
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -845,6 +847,126 @@ async def monteur_projects(user: dict = Depends(get_current_user)):
         items.append(p)
     return items
 
+# ------------------- Customer Portal -------------------
+def build_timeline(project: dict, quote: Optional[dict], checklist: Optional[dict],
+                   customer: dict, signatures: dict) -> List[dict]:
+    stages = [
+        {"key": "lead", "label": "Erstkontakt", "icon": "person-add",
+         "done": True, "date": customer.get("created_at")},
+        {"key": "quote", "label": "Angebot erstellt", "icon": "document-text",
+         "done": quote is not None, "date": (quote or {}).get("created_at")},
+        {"key": "contract", "label": "Auftrag erteilt", "icon": "checkmark-done-circle",
+         "done": project.get("status") in ["genehmigung", "installation", "abnahme", "abgeschlossen"],
+         "date": project.get("created_at") if project.get("status") != "planung" else None},
+        {"key": "material", "label": "Material bestellt", "icon": "cube",
+         "done": checklist is not None, "date": (checklist or {}).get("created_at")},
+        {"key": "installation", "label": "Installation läuft", "icon": "construct",
+         "done": project.get("status") in ["installation", "abnahme", "abgeschlossen"],
+         "date": None},
+    ]
+    if checklist:
+        its = checklist.get("items", [])
+        done = sum(1 for i in its if i.get("status") == "done")
+        if done > 0:
+            last_ts = max((i.get("checked_at") for i in its if i.get("checked_at")), default=None)
+            stages[4]["date"] = last_ts
+            stages[4]["progress"] = f"{done}/{len(its)}"
+    stages.append({"key": "abnahme", "label": "Abnahme", "icon": "ribbon",
+                   "done": bool(signatures.get("customer")),
+                   "date": (signatures.get("customer") or {}).get("signed_at")})
+    stages.append({"key": "done", "label": "In Betrieb", "icon": "sunny",
+                   "done": project.get("status") == "abgeschlossen", "date": None})
+    return stages
+
+
+@api.get("/portal/my")
+async def portal_my(user: dict = Depends(get_current_user)):
+    if user.get("role") != "customer":
+        raise HTTPException(403, "Nur für Kunden-Accounts")
+    customer = await db.customers.find_one({"email": user["email"]}, {"_id": 0})
+    if not customer:
+        raise HTTPException(404, "Kein verknüpfter Kundendatensatz. Bitte beim Vertrieb melden.")
+    projects = [p async for p in db.projects.find({"customer_id": customer["id"]}, {"_id": 0}).sort("created_at", -1)]
+    out_projects = []
+    for project in projects:
+        quote = await db.quotes.find_one({"customer_id": customer["id"]}, {"_id": 0})
+        checklist = await db.checklists.find_one({"project_id": project["id"]}, {"_id": 0})
+        sigs = {}
+        async for s in db.signatures.find({"project_id": project["id"]}, {"_id": 0}):
+            sigs[s["role"]] = s
+        photos = [p async for p in db.site_photos.find({"project_id": project["id"]}, {"_id": 0, "image_base64": 0}).sort("created_at", 1)]
+        timeline = build_timeline(project, quote, checklist, customer, sigs)
+        documents = []
+        if quote:
+            documents.append({"kind": "quote", "label": f"Angebot {quote['quote_number']}",
+                              "date": quote["created_at"], "download": f"/api/quotes/{quote['id']}/pdf"})
+        if sigs.get("customer"):
+            documents.append({"kind": "protocol", "label": "Abnahmeprotokoll",
+                              "date": sigs["customer"]["signed_at"],
+                              "download": f"/api/monteur/protocols/{project['id']}/pdf"})
+        if (checklist or {}).get("bom_snapshot"):
+            added = set()
+            for it in checklist["bom_snapshot"].get("items", []):
+                name = it.get("name", "")
+                if "Solar Fabrik" in name and "SF" not in added:
+                    added.add("SF"); documents.append({"kind": "datasheet", "label": "Solar Fabrik S4 BC Datenblatt", "external": True, "url": "https://www.solar-fabrik.de"})
+                if "Sigenergy" in name and "SI" not in added:
+                    added.add("SI"); documents.append({"kind": "datasheet", "label": "Sigenergy SigenStor Datenblatt", "external": True, "url": "https://www.sigenergy.com/de"})
+                if "SolarEdge" in name and "SE" not in added:
+                    added.add("SE"); documents.append({"kind": "datasheet", "label": "SolarEdge Datenblätter", "external": True, "url": "https://www.solaredge.com/de"})
+                if "Hoymiles" in name and "HO" not in added:
+                    added.add("HO"); documents.append({"kind": "datasheet", "label": "Hoymiles HMS Datenblatt", "external": True, "url": "https://www.hoymiles.com/de/"})
+                if "K2" in name and "K2" not in added:
+                    added.add("K2"); documents.append({"kind": "datasheet", "label": "K2 Systems Unterkonstruktion", "external": True, "url": "https://k2-systems.com/de"})
+        preview = None
+        for p in photos:
+            if p.get("phase") == "module":
+                full = await db.site_photos.find_one({"id": p["id"]}, {"_id": 0, "image_base64": 1})
+                if full: preview = full.get("image_base64"); break
+        out_projects.append({
+            **project, "timeline": timeline, "documents": documents,
+            "photos_count": len(photos),
+            "has_abnahme": bool(sigs.get("customer")),
+            "preview_image": preview,
+            "kwp": project.get("kwp") or (quote or {}).get("layout", {}).get("kwp"),
+        })
+
+    ref = await db.referrals.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not ref:
+        import random, string
+        code = "SM-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        ref = {"id": str(uuid.uuid4()), "user_id": user["id"], "customer_id": customer["id"],
+               "code": code, "leads_count": 0, "converted_count": 0, "bonus_eur": 0,
+               "created_at": now_iso()}
+        await db.referrals.insert_one(ref)
+        ref.pop("_id", None)
+
+    return {"customer": customer, "projects": out_projects, "referral": ref}
+
+
+class ReferralLeadCreate(BaseModel):
+    code: str
+    name: str
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    message: Optional[str] = ""
+
+@api.post("/portal/referral/lead")
+async def referral_lead(data: ReferralLeadCreate):
+    """Öffentlicher Endpoint (keine Auth) — Lead aus Empfehlungslink."""
+    ref = await db.referrals.find_one({"code": data.code.upper()}, {"_id": 0})
+    if not ref:
+        raise HTTPException(404, "Ungültiger Empfehlungs-Code")
+    cid = str(uuid.uuid4())
+    await db.customers.insert_one({
+        "id": cid, "name": data.name, "email": data.email, "phone": data.phone,
+        "stage": "lead", "notes": f"Geworben über {data.code}. Nachricht: {data.message or '—'}",
+        "referred_by_code": data.code.upper(), "created_at": now_iso(),
+    })
+    await db.referrals.update_one({"code": data.code.upper()}, {"$inc": {"leads_count": 1}})
+    return {"ok": True, "lead_id": cid}
+
+
 # ------------------- Companies -------------------
 class CompanyUpsert(BaseModel):
     name: str = "Solar Mitte GmbH"
@@ -1268,6 +1390,16 @@ async def startup():
             "id": str(uuid.uuid4()), "email": monteur_email,
             "password_hash": hash_password("monteur123"),
             "name": "Tom Bauer", "role": "monteur", "phone": "+49 151 23456789", "created_at": now_iso()
+        })
+
+    # Seed customer user (Familie Schmidt — der erste Demo-Kunde)
+    customer_email = "schmidt@example.de"
+    existing_cust_user = await db.users.find_one({"email": customer_email})
+    if not existing_cust_user:
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()), "email": customer_email,
+            "password_hash": hash_password("kunde123"),
+            "name": "Familie Schmidt", "role": "customer", "created_at": now_iso()
         })
 
     # Seed demo customers if empty
