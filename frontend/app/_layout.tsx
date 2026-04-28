@@ -56,6 +56,7 @@ export default function RootLayout() {
             <Stack.Screen name="monteur/index" options={{ presentation: "card" }} />
             <Stack.Screen name="monteur/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="kunde/index" options={{ presentation: "card" }} />
+            <Stack.Screen name="hero-sync" options={{ presentation: "card" }} />
             <Stack.Screen name="inventory/index" options={{ presentation: "card" }} />
             <Stack.Screen name="inventory/[cat]/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="audit/new" options={{ presentation: "modal" }} />

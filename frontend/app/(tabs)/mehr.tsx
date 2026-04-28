@@ -61,6 +61,25 @@ export default function Mehr() {
           <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
 
+        {user?.role === "admin" && (
+          <TouchableOpacity
+            testID="open-hero-sync"
+            style={s.item}
+            onPress={() => (require("expo-router").router as any).push("/hero-sync")}
+          >
+            <View style={[s.iconBox, { backgroundColor: `${colors.info}22`, borderColor: colors.info }]}>
+              <Ionicons name="link" size={20} color={colors.info} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.itemT}>HERO Sync</Text>
+              <Text style={s.itemS}>Projektdaten pullen · Angebote/Protokolle pushen</Text>
+            </View>
+            <View style={s.adminBadge}>
+              <Text style={s.adminBadgeT}>ADMIN</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
           testID="open-planning"
           style={s.item}
@@ -252,6 +271,8 @@ const s = StyleSheet.create({
   iconBox: { width: 40, height: 40, borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   itemT: { color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
   itemS: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
+  adminBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: `${colors.info}22`, borderWidth: 1, borderColor: colors.info },
+  adminBadgeT: { color: colors.info, fontSize: 9, fontWeight: "800", letterSpacing: 1 },
 });
 
 const ai = StyleSheet.create({

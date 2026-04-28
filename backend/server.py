@@ -23,6 +23,10 @@ from photo_audit import measure_roof, detect_obstacles
 from planning_engine import plan_full
 from quotes import structure_quote_with_ai, generate_quote_pdf
 from installer import bom_to_checklist_items, generate_protocol_pdf, PHASE_LABEL
+from hero_service import (
+    hero_pull_project, map_hero_to_local, hero_push_document,
+    hero_push_bom_note, hero_health, IS_MOCK as HERO_IS_MOCK,
+)
 from fastapi.responses import Response
 
 # ------------------- DB -------------------
@@ -847,6 +851,142 @@ async def monteur_projects(user: dict = Depends(get_current_user)):
         items.append(p)
     return items
 
+# ------------------- HERO Bridge -------------------
+class HeroPullRequest(BaseModel):
+    hero_project_id: str
+
+class HeroPushQuoteRequest(BaseModel):
+    quote_id: str
+    hero_project_id: str
+
+class HeroPushProtocolRequest(BaseModel):
+    project_id: str
+    hero_project_id: str
+
+@api.get("/hero/health")
+async def hero_health_endpoint(user: dict = Depends(get_current_user)):
+    return await hero_health()
+
+@api.post("/hero/pull-project")
+async def hero_pull(req: HeroPullRequest, user: dict = Depends(get_current_user)):
+    """Holt Projekt aus HERO, legt Kunde + Projekt intern an (oder aktualisiert)."""
+    if user.get("role") not in ["admin", "vertrieb", "planer"]:
+        raise HTTPException(403, "Nicht berechtigt")
+    try:
+        hero_data = await hero_pull_project(req.hero_project_id)
+    except Exception as e:
+        raise HTTPException(502, f"HERO-API Fehler: {e}")
+    mapped = map_hero_to_local(hero_data)
+
+    # Customer: update if exists (by hero_project_id or email), else create
+    c_data = mapped["customer"]
+    existing = None
+    if c_data.get("hero_project_id"):
+        existing = await db.customers.find_one({"hero_project_id": c_data["hero_project_id"]})
+    if not existing and c_data.get("email"):
+        existing = await db.customers.find_one({"email": c_data["email"]})
+
+    if existing:
+        await db.customers.update_one({"id": existing["id"]}, {"$set": c_data})
+        customer_id = existing["id"]
+    else:
+        customer_id = str(uuid.uuid4())
+        await db.customers.insert_one({"id": customer_id, **c_data, "created_at": now_iso(), "created_by": user["id"]})
+
+    # Project: idem
+    p_data = mapped["project"]
+    p_data["customer_id"] = customer_id
+    existing_p = await db.projects.find_one({"hero_project_id": p_data.get("hero_project_id")})
+    if existing_p:
+        await db.projects.update_one({"id": existing_p["id"]}, {"$set": p_data})
+        project_id = existing_p["id"]
+    else:
+        project_id = str(uuid.uuid4())
+        await db.projects.insert_one({"id": project_id, **p_data, "created_at": now_iso(), "created_by": user["id"]})
+
+    await db.hero_sync_log.insert_one({
+        "id": str(uuid.uuid4()),
+        "direction": "pull", "hero_project_id": req.hero_project_id,
+        "local_customer_id": customer_id, "local_project_id": project_id,
+        "user_id": user["id"], "created_at": now_iso(),
+        "mock": hero_data.get("_mock", False),
+    })
+    return {
+        "ok": True,
+        "customer_id": customer_id,
+        "project_id": project_id,
+        "mock": hero_data.get("_mock", False),
+        "hero_data": hero_data,
+    }
+
+@api.post("/hero/push-quote")
+async def hero_push_quote_endpoint(req: HeroPushQuoteRequest, user: dict = Depends(get_current_user)):
+    if user.get("role") not in ["admin", "vertrieb"]:
+        raise HTTPException(403, "Nicht berechtigt")
+    q = await db.quotes.find_one({"id": req.quote_id}, {"_id": 0})
+    if not q: raise HTTPException(404, "Angebot nicht gefunden")
+    company = await db.companies.find_one({"id": "default"}, {"_id": 0}) or {}
+    pdf_bytes = generate_quote_pdf(
+        quote=q["structured"], customer=q["customer_snapshot"],
+        user=q["user_snapshot"], company=company, quote_number=q["quote_number"],
+    )
+    result = await hero_push_document(
+        hero_project_id=req.hero_project_id,
+        doc_type="quote",
+        filename=f"Angebot_{q['quote_number']}.pdf",
+        pdf_bytes=pdf_bytes,
+        note=f"Auto-generiertes Angebot {q['quote_number']} · Netto € {q.get('total_net',0):.2f}",
+        metadata={"quote_number": q["quote_number"], "total_net": q.get("total_net")},
+    )
+    # BOM als zusätzliche Notiz
+    if q.get("bom") and q.get("layout"):
+        await hero_push_bom_note(req.hero_project_id, q["bom"], q["layout"])
+    await db.hero_sync_log.insert_one({
+        "id": str(uuid.uuid4()),
+        "direction": "push-quote", "hero_project_id": req.hero_project_id,
+        "local_quote_id": req.quote_id, "user_id": user["id"],
+        "created_at": now_iso(), "mock": result.get("_mock", False),
+    })
+    return result
+
+@api.post("/hero/push-protocol")
+async def hero_push_protocol_endpoint(req: HeroPushProtocolRequest, user: dict = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": req.project_id}, {"_id": 0})
+    if not project: raise HTTPException(404, "Projekt nicht gefunden")
+    customer = await db.customers.find_one({"id": project.get("customer_id")}, {"_id": 0}) or {}
+    company = await db.companies.find_one({"id": "default"}, {"_id": 0}) or {}
+    cl = await db.checklists.find_one({"project_id": req.project_id}, {"_id": 0})
+    photos = [p async for p in db.site_photos.find({"project_id": req.project_id}, {"_id": 0}).sort("created_at", 1)]
+    sigs = {}
+    async for s in db.signatures.find({"project_id": req.project_id}, {"_id": 0}): sigs[s["role"]] = s
+    pdf = generate_protocol_pdf(
+        project=project, customer=customer, company=company, user=user,
+        checklist=(cl or {}).get("items", []), photos=photos,
+        layout=(cl or {}).get("layout_snapshot"), bom=(cl or {}).get("bom_snapshot"),
+        signatures=sigs,
+    )
+    result = await hero_push_document(
+        hero_project_id=req.hero_project_id,
+        doc_type="protocol",
+        filename=f"Abnahmeprotokoll_{project.get('title','Projekt')}.pdf",
+        pdf_bytes=pdf,
+        note=f"Abnahmeprotokoll · {len(photos)} Fotos · Kunden-Signatur: {'ja' if sigs.get('customer') else 'nein'}",
+    )
+    await db.hero_sync_log.insert_one({
+        "id": str(uuid.uuid4()),
+        "direction": "push-protocol", "hero_project_id": req.hero_project_id,
+        "local_project_id": req.project_id, "user_id": user["id"],
+        "created_at": now_iso(), "mock": result.get("_mock", False),
+    })
+    return result
+
+@api.get("/hero/sync-log")
+async def hero_sync_log(user: dict = Depends(get_current_user)):
+    items = []
+    async for x in db.hero_sync_log.find({}, {"_id": 0}).sort("created_at", -1).limit(50):
+        items.append(x)
+    return items
+
 # ------------------- Customer Portal -------------------
 def build_timeline(project: dict, quote: Optional[dict], checklist: Optional[dict],
                    customer: dict, signatures: dict) -> List[dict]:
@@ -972,18 +1112,18 @@ class CompanyUpsert(BaseModel):
     name: str = "Solar Mitte GmbH"
     legal_name: Optional[str] = "Solar Mitte GmbH"
     tagline: Optional[str] = "Photovoltaik · Speicher · Wallbox"
-    street: Optional[str] = "Energieplatz 1"
-    zip_code: Optional[str] = "10115"
-    city: Optional[str] = "Berlin"
-    phone: Optional[str] = "+49 30 1234567"
+    street: Optional[str] = "Am Knick 12"
+    zip_code: Optional[str] = "34253"
+    city: Optional[str] = "Lohfelden"
+    phone: Optional[str] = "+49 561 9999 9999"
     email: Optional[str] = "info@solar-mitte.de"
     website: Optional[str] = "www.solar-mitte.de"
-    tax_id: Optional[str] = "11/123/45678"
+    tax_id: Optional[str] = "025 234 56789"
     vat_id: Optional[str] = "DE123456789"
-    trade_register: Optional[str] = "HRB 12345 B"
-    bank_name: Optional[str] = "Deutsche Bank Berlin"
-    iban: Optional[str] = "DE12 1007 0024 0123 4567 89"
-    bic: Optional[str] = "DEUTDEDBBER"
+    trade_register: Optional[str] = "HRB 518438 · Amtsgericht Kassel"
+    bank_name: Optional[str] = "VR-Bank Mitte eG"
+    iban: Optional[str] = "DE00 5226 0385 0000 1234 56"
+    bic: Optional[str] = "GENODEF1HRV"
 
 @api.get("/company")
 async def get_company(user: dict = Depends(get_current_user)):
@@ -1360,6 +1500,16 @@ async def startup():
         if ext_edges:
             await db.inv_compatibilities.insert_many(ext_edges)
         logger.info(f"V2 Erweiterung: {added} neue Artikel, {len(ext_edges)} neue Kompatibilitäten")
+
+    # Reset company-Default auf aktuelle Firmenangaben (HRB 518438, VR-Bank Mitte)
+    # Nur überschreiben wenn keine manuellen Änderungen durch Admin vorliegen (erkennbar am street-Feld)
+    existing_company = await db.companies.find_one({"id": "default"})
+    if not existing_company or existing_company.get("street") in [None, "Energieplatz 1", ""]:
+        await db.companies.update_one(
+            {"id": "default"},
+            {"$set": {**CompanyUpsert().dict(), "updated_at": now_iso()}},
+            upsert=True
+        )
 
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@solar-mitte.de").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
