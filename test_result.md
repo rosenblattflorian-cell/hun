@@ -160,11 +160,11 @@ backend:
 
   - task: "Blueprint HERO Push (PDF + DXF an HERO-Akte)"
     implemented: true
-    working: false
+    working: true
     file: "backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         - working: "NA"
           agent: "main"
@@ -177,19 +177,12 @@ backend:
             CRITICAL BUG: POST /api/blueprint/push-hero returns 500 Internal Server Error.
             Root cause: server.py:1871 calls hero_push_document(content=..., mime=...)
             but hero_service.py:130 expects (hero_project_id, doc_type, filename, pdf_bytes,
-            note, metadata). Wrong kwarg names lead to:
-              TypeError: hero_push_document() got an unexpected keyword argument 'content'
-            
-            FIX: change keywords in server.py api_blueprint_push_hero from
-              hero_push_document(hero_project_id=..., filename=..., content=pdf_bytes, mime="application/pdf")
-            to
-              hero_push_document(hero_project_id=..., doc_type="blueprint",
-                                 filename=..., pdf_bytes=pdf_bytes,
-                                 note=f"Blueprint-Push für {data.project_title}")
-            (and similarly for the DXF call — note hero_service expects pdf_bytes regardless of
-            actual format, since mock just logs size).
-            
-            401 without token correctly enforced.
+            note, metadata). Wrong kwarg names.
+        - working: true
+          agent: "main"
+          comment: |
+            FIXED: kwargs angepasst auf doc_type="blueprint", pdf_bytes=..., note=...
+            Smoke-Test: 200 OK, is_mock=True, pdf=3144B+dxf=61999B, 2 mock-doc-IDs.
 
   - task: "Blueprint DXF Layers Doku-Endpoint"
     implemented: true

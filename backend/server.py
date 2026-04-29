@@ -1601,10 +1601,11 @@ class ObstacleRequest(BaseModel):
     relative: bool = True          # True => Werte sind 0..1 Prozent
 
 class ModuleRequest(BaseModel):
-    x: float
+    x: float                       # 0..1 relativ ODER absolut (m)
     y: float
-    w_m: float = 1.722
-    h_m: float = 1.134
+    w_m: float = 1.722             # Modul-Breite in Meter (immer absolut)
+    h_m: float = 1.134             # Modul-Höhe in Meter (immer absolut)
+    relative: bool = True          # True => x,y sind 0..1 Prozent
 
 class BlueprintRequest(BaseModel):
     audit_id: Optional[str] = None
@@ -1661,8 +1662,15 @@ async def _resolve_blueprint_data(req: BlueprintRequest) -> RoofBlueprintData:
                 "w": obs.w / L, "h": obs.h / B, "label": obs.label,
             })
 
-    return from_roof_audit(audit_dict, customer_dict, obstacles_pct,
-                            modules_pct=[m.model_dump() for m in req.modules])
+    # Module: x/y können relativ (0..1) oder absolut (m) sein
+    modules_pct = []
+    for m in req.modules:
+        if m.relative:
+            modules_pct.append({"x": m.x, "y": m.y, "w_m": m.w_m, "h_m": m.h_m})
+        else:
+            modules_pct.append({"x": m.x / L, "y": m.y / B, "w_m": m.w_m, "h_m": m.h_m})
+
+    return from_roof_audit(audit_dict, customer_dict, obstacles_pct, modules_pct=modules_pct)
 
 
 @app.post("/api/blueprint/dxf")
@@ -1870,13 +1878,17 @@ async def api_blueprint_push_hero(req: BlueprintRequest, user: dict = Depends(ge
     hero_project_id = "HRO-MOCK-PROJECT"  # In MVP: aus Project-Metadaten ableiten
     pdf_resp = await hero_push_document(
         hero_project_id=hero_project_id,
+        doc_type="blueprint",
         filename=f"Blueprint_{data.project_title.replace(' ', '_')}.pdf",
-        content=pdf_bytes, mime="application/pdf",
+        pdf_bytes=pdf_bytes,
+        note="Vektor-Blueprint (Solar Mitte)",
     )
     dxf_resp = await hero_push_document(
         hero_project_id=hero_project_id,
+        doc_type="blueprint",
         filename=f"Blueprint_{data.project_title.replace(' ', '_')}.dxf",
-        content=dxf_bytes, mime="application/dxf",
+        pdf_bytes=dxf_bytes,
+        note="K2-Base-konformer DXF-Plan",
     )
 
     log_entry = {
