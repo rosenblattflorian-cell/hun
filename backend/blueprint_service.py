@@ -355,8 +355,14 @@ def generate_dxf(data: RoofBlueprintData) -> bytes:
 # ====================== PDF (Vektor-Blueprint) ======================
 # Polycam-Style: weißer BG, schwarze Linien, Bemaßung, Solar-Mitte-Header
 
-def generate_pdf_blueprint(data: RoofBlueprintData) -> bytes:
-    """A3 Vektor-Blueprint im Solar-Mitte-Branding."""
+def generate_pdf_blueprint(data: RoofBlueprintData, project_number: Optional[str] = None,
+                            author: Optional[str] = None, confidence: Optional[float] = None) -> bytes:
+    """
+    A3 Vektor-Blueprint im Solar-Mitte-Branding.
+    project_number: optionale HERO/Projekt-Nummer im Titelblock.
+    author: Ersteller des Plans (für Titelblock).
+    confidence: Wenn < 0.8, wird oben ein gelbes "Bitte verifizieren"-Banner gezeichnet.
+    """
     buf = BytesIO()
     pw, ph = landscape(A3)  # 420 x 297 mm
     c = canvas.Canvas(buf, pagesize=landscape(A3))
@@ -391,12 +397,32 @@ def generate_pdf_blueprint(data: RoofBlueprintData) -> bytes:
     c.drawString(85 * mm, ph - 18 * mm,
                  f"Projekt: {data.project_title}   |   Kunde: {data.customer_name}")
 
-    # Datum oben rechts
+    # Datum + Projektnummer + Author oben rechts (Titelblock)
     from datetime import datetime
     c.setFont("Helvetica", 9)
-    c.drawRightString(pw - 15 * mm, ph - 12 * mm, datetime.now().strftime("%d.%m.%Y · %H:%M"))
+    c.drawRightString(pw - 15 * mm, ph - 8 * mm, datetime.now().strftime("%d.%m.%Y · %H:%M"))
+    if project_number:
+        c.setFont("Helvetica-Bold", 10)
+        c.setFillColor(YELLOW)
+        c.drawRightString(pw - 15 * mm, ph - 14 * mm, f"PROJEKT: {project_number}")
+        c.setFillColor(white)
+    if author:
+        c.setFont("Helvetica", 8)
+        c.drawRightString(pw - 15 * mm, ph - 19 * mm, f"Erstellt: {author}")
     c.setFont("Helvetica", 8)
-    c.drawRightString(pw - 15 * mm, ph - 17 * mm, data.address)
+    c.drawRightString(pw - 15 * mm, ph - 23 * mm, data.address)
+
+    # Confidence-Banner (gelb), wenn KI < 80% sicher
+    if confidence is not None and confidence < 0.8:
+        c.setFillColor(HexColor("#FFF3C4"))
+        c.setStrokeColor(HexColor("#E6C200"))
+        c.setLineWidth(1.5)
+        c.rect(15 * mm, ph - 35 * mm, pw - 30 * mm, 8 * mm, fill=1, stroke=1)
+        c.setFillColor(HexColor("#E65100"))
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(20 * mm, ph - 30.5 * mm,
+                     f"⚠ KI-CONFIDENCE NIEDRIG ({confidence*100:.0f}%) — Bitte Maße manuell verifizieren, "
+                     f"Hindernis-Erkennung unsicher.")
 
     # ---- Drawing area ----
     L = data.laenge
@@ -443,11 +469,23 @@ def generate_pdf_blueprint(data: RoofBlueprintData) -> bytes:
     else:
         c.rect(mx(0), my(0), L * scale, B * scale, stroke=1, fill=0)
 
-    # ---- KEEPOUT zones (red hatched) ----
+    # ---- KEEPOUT zones (red hatched) — mit Auto-ID-Codes ST-01, DF-01, LF-01 ----
+    type_prefixes = {
+        "chimney": "ST", "skylight": "DF", "vent": "LF",
+        "dormer": "GA", "antenna": "AN",
+    }
+    type_counter: Dict[str, int] = {}
+    obstacle_legend = []  # für Legende: [(id, type_label, label), ...]
+
     c.setFillColor(HexColor("#FFE5E5"))
     c.setStrokeColor(HexColor("#D32F2F"))
     c.setLineWidth(1.4)
     for obs in data.obstacles:
+        prefix = type_prefixes.get(obs.type, "OB")
+        type_counter[prefix] = type_counter.get(prefix, 0) + 1
+        oid = f"{prefix}-{type_counter[prefix]:02d}"
+        obstacle_legend.append((oid, obs.type, obs.label or obs.type))
+
         c.rect(mx(obs.x_m), my(obs.y_m), obs.w_m * scale, obs.h_m * scale, stroke=1, fill=1)
         # Hatching: kurze 45°-Linien
         c.setStrokeColor(HexColor("#D32F2F"))
@@ -458,12 +496,11 @@ def generate_pdf_blueprint(data: RoofBlueprintData) -> bytes:
             c.line(mx(obs.x_m + t * obs.w_m), my(obs.y_m),
                    mx(obs.x_m), my(obs.y_m + t * obs.h_m))
         c.setLineWidth(1.4)
-        # Label
+        # ID-Tag (statt nur Label)
         c.setFillColor(HexColor("#D32F2F"))
-        c.setFont("Helvetica-Bold", 7)
+        c.setFont("Helvetica-Bold", 8)
         c.drawCentredString(mx(obs.x_m + obs.w_m / 2),
-                            my(obs.y_m + obs.h_m / 2) - 2,
-                            f"{(obs.label or obs.type).upper()}")
+                            my(obs.y_m + obs.h_m / 2) - 2, oid)
         c.setFillColor(HexColor("#FFE5E5"))
         c.setStrokeColor(HexColor("#D32F2F"))
 
@@ -547,26 +584,48 @@ def generate_pdf_blueprint(data: RoofBlueprintData) -> bytes:
     c.setFont("Helvetica-Bold", 12)
     c.drawCentredString(nx, ny + 10 * mm, "N")
 
-    # ---- Legende ----
+    # ---- Legende — automatische Bauteile-Liste mit ID-Codes ----
     leg_x = 15 * mm
-    leg_y = 30 * mm
-    c.setFont("Helvetica-Bold", 8)
+    leg_y = 60 * mm
+    c.setFont("Helvetica-Bold", 9)
     c.setFillColor(NAVY)
     c.drawString(leg_x, leg_y, "LEGENDE")
+    c.setLineWidth(0.5)
+    c.line(leg_x, leg_y - 2, leg_x + 50 * mm, leg_y - 2)
+
     c.setFont("Helvetica", 7)
     legend_items = [
-        ("Dachumriss", black, False),
-        ("Sperrfläche (Keep-out)", HexColor("#D32F2F"), True),
-        ("PV-Modul (geplant)", HexColor("#0288D1"), True),
-        ("Maßlinie", black, False),
+        ("Dachumriss", black, False, ""),
+        ("Sperrfläche (Keep-out)", HexColor("#D32F2F"), True, ""),
+        ("PV-Modul (geplant)", HexColor("#0288D1"), True, ""),
+        ("Maßlinie", black, False, ""),
     ]
-    for i, (label, color, fill) in enumerate(legend_items):
-        y = leg_y - 5 - i * 4 * mm
+    for i, (label, color, fill, _) in enumerate(legend_items):
+        y = leg_y - 6 - i * 4 * mm
         c.setFillColor(color if fill else black)
         c.setStrokeColor(color)
         c.rect(leg_x, y - 1 * mm, 4 * mm, 2 * mm, fill=fill, stroke=1)
         c.setFillColor(black)
         c.drawString(leg_x + 6 * mm, y, label)
+
+    # Bauteile-Liste mit Auto-IDs (ST-01: Schornstein, DF-01: Dachfenster, ...)
+    if obstacle_legend:
+        bl_y = leg_y - 6 - len(legend_items) * 4 * mm - 5
+        c.setFont("Helvetica-Bold", 8)
+        c.setFillColor(HexColor("#D32F2F"))
+        c.drawString(leg_x, bl_y, "ERKANNTE BAUTEILE")
+        c.setLineWidth(0.5)
+        c.line(leg_x, bl_y - 2, leg_x + 50 * mm, bl_y - 2)
+        c.setFont("Helvetica", 7)
+        c.setFillColor(black)
+        for i, (oid, otype, olabel) in enumerate(obstacle_legend):
+            y = bl_y - 6 - i * 3.5 * mm
+            c.setFont("Courier-Bold", 7)
+            c.setFillColor(HexColor("#D32F2F"))
+            c.drawString(leg_x, y, oid)
+            c.setFont("Helvetica", 7)
+            c.setFillColor(black)
+            c.drawString(leg_x + 14 * mm, y, str(olabel))
 
     # ---- Footer ----
     c.setFillColor(NAVY)

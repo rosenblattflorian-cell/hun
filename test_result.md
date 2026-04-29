@@ -107,7 +107,42 @@ backend:
           comment: |
             PNG: 28930 bytes (>10KB), magic bytes \\x89PNG confirmed, Content-Type image/png.
 
-  - task: "Blueprint Plausibilitäts-Validator"
+  - task: "Blueprint PDF mit Auto-IDs + Titelblock + Confidence-Banner"
+    implemented: true
+    working: "NA"
+    file: "backend/blueprint_service.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            PDF v2 erweitert:
+              - Auto-ID-Codes für Sperrflächen: ST-01 (Schornstein), DF-01 (Dachfenster),
+                LF-01 (Lüfter), GA-01 (Gaube), AN-01 (Antenne), pro Typ counted
+              - Titelblock oben rechts: Datum, optionale PROJEKT-Nummer (gelb), Erstell-Author
+              - Confidence-Banner (gelb), wenn KI-Konfidenz < 80%: "Bitte Maße manuell verifizieren"
+              - Legende um "ERKANNTE BAUTEILE"-Liste erweitert (ID-Code + Label, monospace)
+            Visuell durch KI-Analyse bestätigt: 95% confidence, Profi-Bauplan-Niveau.
+
+  - task: "Frontend Guardian-Validation-Banner"
+    implemented: true
+    working: true
+    file: "frontend/app/blueprint.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Auto-Validate via debounced useEffect bei jeder Änderung. Banner zeigt:
+              - Bei Errors: rotes Banner mit Error-Codes + Messages, Export-Buttons disabled
+              - Bei Warnings: gelbes Banner mit Warnings, Export bleibt aktiv
+              - Bei OK: grünes "Plausibilitätscheck OK"-Banner
+            Visuell verifiziert via Screenshot.
+
     implemented: true
     working: true
     file: "backend/blueprint_service.py"

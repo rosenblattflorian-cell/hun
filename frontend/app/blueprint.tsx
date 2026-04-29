@@ -124,6 +124,23 @@ export default function BlueprintScreen() {
     return null;
   };
 
+  /** Live-Validate: schickt aktuelle Daten an Backend und zeigt Issues inline. */
+  const runValidate = async () => {
+    const body = buildRequestBody();
+    if (!body) return;
+    try {
+      const v = await apiPost<any>("/blueprint/validate", body);
+      setValidation({ errors: v.errors || [], warnings: v.warnings || [], info: v.info || [] });
+    } catch {}
+  };
+
+  // Auto-validate on changes (debounced)
+  React.useEffect(() => {
+    const t = setTimeout(() => { runValidate(); }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, showInline, JSON.stringify(obstacles), JSON.stringify(inline)]);
+
   const downloadFormat = async (fmt: typeof FORMATS[0]) => {
     const body = buildRequestBody();
     if (!body) {
@@ -385,14 +402,64 @@ export default function BlueprintScreen() {
               Wähle das gewünschte Format. Alle Dateien sind maßstabsgetreu (Meter)
               und enthalten Bemaßung, Pitch und Sperrflächen-Layer.
             </Text>
+
+            {/* Live Validation Banner — Guardian Engine */}
+            {(validation.errors.length > 0 || validation.warnings.length > 0) && (
+              <View style={[
+                s.guardBanner,
+                { borderColor: validation.errors.length > 0 ? colors.danger : colors.accent,
+                  backgroundColor: validation.errors.length > 0 ? `${colors.danger}15` : colors.accentGlow },
+              ]}>
+                <View style={s.guardHead}>
+                  <Ionicons
+                    name={validation.errors.length > 0 ? "alert-circle" : "warning"}
+                    size={16}
+                    color={validation.errors.length > 0 ? colors.danger : colors.accent}
+                  />
+                  <Text style={[s.guardT, {
+                    color: validation.errors.length > 0 ? colors.danger : colors.accent,
+                  }]}>
+                    GUARDIAN PRÜFUNG · {validation.errors.length} Fehler · {validation.warnings.length} Warnungen
+                  </Text>
+                </View>
+                {validation.errors.map((e, i) => (
+                  <View key={`err-${i}`} style={s.guardRow}>
+                    <Text style={[s.guardCode, { color: colors.danger }]}>✗ {e.code}</Text>
+                    <Text style={s.guardMsg}>{e.message}</Text>
+                  </View>
+                ))}
+                {validation.warnings.map((w, i) => (
+                  <View key={`warn-${i}`} style={s.guardRow}>
+                    <Text style={[s.guardCode, { color: colors.accent }]}>⚠ {w.code}</Text>
+                    <Text style={s.guardMsg}>{w.message}</Text>
+                  </View>
+                ))}
+                {validation.errors.length === 0 && validation.warnings.length > 0 && (
+                  <Text style={s.guardNote}>
+                    Warnungen blocken den Export nicht — nur zur Aufmerksamkeit.
+                  </Text>
+                )}
+              </View>
+            )}
+            {validation.errors.length === 0 && validation.warnings.length === 0 && hasInput && (
+              <View style={s.guardOk}>
+                <Ionicons name="checkmark-circle" size={14} color={colors.primary} />
+                <Text style={s.guardOkT}>Plausibilitätscheck OK · alle Geometrien valide</Text>
+              </View>
+            )}
+
             <View style={{ marginTop: 10, gap: 8 }}>
               {FORMATS.map(fmt => (
                 <TouchableOpacity
                   key={fmt.key}
                   testID={`export-${fmt.key}`}
-                  disabled={!hasInput || busy !== null}
+                  disabled={!hasInput || busy !== null || validation.errors.length > 0}
                   onPress={() => downloadFormat(fmt)}
-                  style={[s.fmtBtn, { borderColor: fmt.color }, !hasInput && { opacity: 0.4 }]}
+                  style={[
+                    s.fmtBtn,
+                    { borderColor: fmt.color },
+                    (!hasInput || validation.errors.length > 0) && { opacity: 0.4 },
+                  ]}
                 >
                   <View style={[s.fmtIcon, { borderColor: fmt.color, backgroundColor: `${fmt.color}18` }]}>
                     {busy === fmt.key
@@ -575,4 +642,18 @@ const s = StyleSheet.create({
   photoChipT: { color: colors.textPrimary, fontSize: 12, fontWeight: "700" },
   photoBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 999, backgroundColor: colors.accent, marginLeft: 4 },
   photoBadgeT: { color: "#000", fontSize: 9, fontWeight: "900" },
+
+  /* Guardian Validation Banner */
+  guardBanner: {
+    marginTop: 10, padding: 10, borderRadius: 10,
+    borderWidth: 1.5, gap: 6,
+  },
+  guardHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  guardT: { fontSize: 11, fontWeight: "900", letterSpacing: 0.6 },
+  guardRow: { flexDirection: "row", gap: 8, paddingTop: 4, alignItems: "flex-start" },
+  guardCode: { fontSize: 10, fontWeight: "900", fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", minWidth: 110 },
+  guardMsg: { flex: 1, color: colors.textPrimary, fontSize: 11, lineHeight: 16 },
+  guardNote: { color: colors.textSecondary, fontSize: 10, fontStyle: "italic", marginTop: 4 },
+  guardOk: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.primaryGlow, borderWidth: 1, borderColor: colors.borderActive, marginTop: 10 },
+  guardOkT: { color: colors.primary, fontSize: 11, fontWeight: "800", letterSpacing: 0.4 },
 });
