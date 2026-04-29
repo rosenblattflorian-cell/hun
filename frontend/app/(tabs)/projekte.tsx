@@ -34,7 +34,17 @@ export default function Projekte() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={["top"]}>
       <View style={s.head}>
-        <Text style={typography.h2}>Projekte</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <TouchableOpacity
+            testID="hub-button"
+            onPress={() => router.replace("/hub")}
+            style={s.hubBtn}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="grid" size={16} color={colors.primary} />
+          </TouchableOpacity>
+          <Text style={typography.h2}>Projekte</Text>
+        </View>
         <TouchableOpacity testID="add-project-btn" style={s.addBtn} onPress={() => setModal(true)}>
           <Ionicons name="add" size={22} color="#fff" />
         </TouchableOpacity>
@@ -160,6 +170,7 @@ function NewProjectModal({ visible, customers, onClose }: any) {
 const s = StyleSheet.create({
   head: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: spacing.lg, paddingBottom: spacing.sm },
   addBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" },
+  hubBtn: { width: 36, height: 36, borderRadius: 999, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.borderActive, backgroundColor: colors.primaryGlow },
   card: { padding: spacing.md, borderRadius: 14, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border, marginBottom: spacing.sm },
   title: { color: colors.textPrimary, fontSize: 16, fontWeight: "700", flex: 1 },
   sub: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },

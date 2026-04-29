@@ -20,7 +20,7 @@ function Gate({ children }: { children: React.ReactNode }) {
     else if (user && inAuth) {
       if (user.role === "monteur") router.replace("/monteur");
       else if (user.role === "customer") router.replace("/kunde");
-      else router.replace("/(tabs)/dashboard");
+      else router.replace("/hub");
     } else if (user && user.role === "monteur" && !inMonteur) {
       router.replace("/monteur");
     } else if (user && user.role === "customer" && !inKunde) {
@@ -46,6 +46,7 @@ export default function RootLayout() {
         <Gate>
           <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
             <Stack.Screen name="login" />
+            <Stack.Screen name="hub" />
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="customer/[id]" options={{ presentation: "card" }} />
             <Stack.Screen name="project/[id]" options={{ presentation: "card" }} />

@@ -31,7 +31,17 @@ export default function KundenList() {
   return (
     <SafeAreaView style={styles.c} edges={["top"]}>
       <View style={styles.head}>
-        <Text style={typography.h2}>Kunden</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <TouchableOpacity
+            testID="hub-button"
+            onPress={() => router.replace("/hub")}
+            style={styles.hubBtn}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="grid" size={16} color={colors.primary} />
+          </TouchableOpacity>
+          <Text style={typography.h2}>Kunden</Text>
+        </View>
         <TouchableOpacity testID="add-customer-btn" style={styles.addBtn} onPress={() => setModal(true)}>
           <Ionicons name="add" size={22} color="#fff" />
         </TouchableOpacity>
@@ -186,6 +196,7 @@ const styles = StyleSheet.create({
   c: { flex: 1, backgroundColor: colors.bg },
   head: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: spacing.lg, paddingBottom: spacing.sm },
   addBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" },
+  hubBtn: { width: 36, height: 36, borderRadius: 999, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.borderActive, backgroundColor: colors.primaryGlow },
   searchBox: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: spacing.md, paddingHorizontal: 12, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border, borderRadius: 10 },
   searchInput: { flex: 1, color: colors.textPrimary, paddingVertical: 12, fontSize: 14 },
   filters: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 8 },

@@ -1,6 +1,7 @@
 import React from "react";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { Platform } from "react-native";
 import { colors } from "../../src/theme";
 
 export default function TabsLayout() {
@@ -10,50 +11,65 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarStyle: {
           backgroundColor: colors.paper,
-          borderTopColor: colors.border,
+          borderTopColor: colors.borderSoft,
           borderTopWidth: 1,
-          height: 72,
+          height: Platform.OS === "ios" ? 84 : 70,
           paddingTop: 8,
-          paddingBottom: 12,
+          paddingBottom: Platform.OS === "ios" ? 24 : 12,
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textSecondary,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: "700", letterSpacing: 0.3 },
+        tabBarItemStyle: { paddingTop: 4 },
       }}
     >
       <Tabs.Screen
         name="dashboard"
         options={{
           title: "Dashboard",
-          tabBarIcon: ({ color }) => <Ionicons name="grid" size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? "grid" : "grid-outline"} size={22} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="kunden"
         options={{
           title: "Kunden",
-          tabBarIcon: ({ color }) => <Ionicons name="people" size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? "people" : "people-outline"} size={22} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="aufmass"
         options={{
           title: "Aufmaß",
-          tabBarIcon: ({ color }) => <Ionicons name="scan" size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? "scan" : "scan-outline"} size={22} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="projekte"
         options={{
           title: "Projekte",
-          tabBarIcon: ({ color }) => <Ionicons name="briefcase" size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? "briefcase" : "briefcase-outline"} size={22} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="mehr"
         options={{
           title: "Mehr",
-          tabBarIcon: ({ color }) => <Ionicons name="ellipsis-horizontal" size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? "ellipsis-horizontal-circle" : "ellipsis-horizontal-circle-outline"}
+              size={22}
+              color={color}
+            />
+          ),
         }}
       />
     </Tabs>

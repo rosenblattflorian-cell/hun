@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform, Alert, ActivityIndicator, FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, typography, spacing } from "../../src/theme";
 import { apiGet, apiPost, apiDelete } from "../../src/api";
@@ -13,6 +13,7 @@ import RoofPlan from "../../src/RoofPlan";
 const ORIENT = ["Süd", "SO", "SW", "Ost", "West", "NO", "NW", "Nord"];
 
 export default function AufmassTab() {
+  const router = useRouter();
   const [tab, setTab] = useState<"neu" | "liste">("neu");
   const [audits, setAudits] = useState<any[]>([]);
   const loadAudits = async () => setAudits(await apiGet("/roof-audits"));
@@ -21,6 +22,14 @@ export default function AufmassTab() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={["top"]}>
       <View style={s.head}>
+        <TouchableOpacity
+          testID="hub-button"
+          onPress={() => router.replace("/hub")}
+          style={s.hubBtn}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="grid" size={16} color={colors.primary} />
+        </TouchableOpacity>
         <Text style={typography.h2}>Dachaufmaß</Text>
       </View>
       <View style={s.tabs}>
@@ -264,7 +273,8 @@ function NumField({ label, v, set, unit, testID }: any) {
 }
 
 const s = StyleSheet.create({
-  head: { padding: spacing.lg, paddingBottom: spacing.sm },
+  head: { padding: spacing.lg, paddingBottom: spacing.sm, flexDirection: "row", alignItems: "center", gap: 12 },
+  hubBtn: { width: 36, height: 36, borderRadius: 999, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.borderActive, backgroundColor: colors.primaryGlow },
   tabs: { flexDirection: "row", paddingHorizontal: spacing.md, gap: 8, marginBottom: spacing.sm },
   tab: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border },
   tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },

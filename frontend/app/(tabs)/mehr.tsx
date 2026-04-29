@@ -5,6 +5,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { colors, typography, spacing } from "../../src/theme";
 import { apiPost, apiGet } from "../../src/api";
 import * as Clipboard from "expo-clipboard";
@@ -260,7 +261,8 @@ function AIChat({ onBack }: { onBack: () => void }) {
 }
 
 const s = StyleSheet.create({
-  head: { padding: spacing.lg, paddingBottom: spacing.sm },
+  head: { padding: spacing.lg, paddingBottom: spacing.sm, flexDirection: "row", alignItems: "center", gap: 12 },
+  hubBtn: { width: 36, height: 36, borderRadius: 999, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.borderActive, backgroundColor: colors.primaryGlow },
   profile: { flexDirection: "row", alignItems: "center", gap: 14, padding: spacing.md, borderRadius: 14, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border, marginBottom: spacing.md },
   avatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.primary, alignItems: "center", justifyContent: "center" },
   name: { color: colors.textPrimary, fontSize: 18, fontWeight: "700" },

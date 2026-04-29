@@ -7,6 +7,7 @@ import Svg, { Rect } from "react-native-svg";
 import { colors, typography, spacing, STAGE_COLORS, STAGE_LABELS } from "../../src/theme";
 import { apiGet } from "../../src/api";
 import { useAuth } from "../../src/auth";
+import { HubFab } from "../../src/HubFab";
 
 type Stats = {
   total_customers: number; leads: number; angebote: number; in_installation: number; abgeschlossen: number;
@@ -43,9 +44,15 @@ export default function Dashboard() {
             <Text style={styles.greeting}>Guten Tag,</Text>
             <Text style={styles.name}>{user?.name}</Text>
           </View>
-          <View style={styles.avatar}>
-            <Ionicons name="sunny" size={22} color={colors.primary} />
-          </View>
+          <TouchableOpacity
+            testID="hub-button"
+            onPress={() => router.replace("/hub")}
+            style={styles.hubBtn}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="grid" size={18} color={colors.primary} />
+            <Text style={styles.hubBtnT}>Hub</Text>
+          </TouchableOpacity>
         </View>
 
         {loading && !stats ? (
@@ -157,6 +164,8 @@ const styles = StyleSheet.create({
   greeting: { color: colors.textSecondary, fontSize: 13 },
   name: { ...typography.h2, marginTop: 2 },
   avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.paper, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border },
+  hubBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: colors.borderActive, backgroundColor: colors.primaryGlow },
+  hubBtnT: { color: colors.primary, fontSize: 12, fontWeight: "900", letterSpacing: 0.6 },
   heroKpi: { marginHorizontal: spacing.lg, padding: spacing.lg, borderRadius: 16, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border },
   kpiLabel: { color: colors.textSecondary, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", fontWeight: "600" },
   heroValue: { fontSize: 36, fontWeight: "800", color: colors.primary, marginTop: 6, letterSpacing: -1 },
