@@ -26,7 +26,7 @@ from installer import bom_to_checklist_items, generate_protocol_pdf, PHASE_LABEL
 from blueprint_service import (
     RoofBlueprintData, Obstacle, PvModule, from_roof_audit,
     generate_dxf, generate_pdf_blueprint, generate_obj, generate_png_topdown,
-    DXF_LAYERS,
+    DXF_LAYERS, validate_blueprint, has_blocking_errors, ValidationIssue,
 )
 from hero_service import (
     hero_pull_project, map_hero_to_local, hero_push_document,
@@ -1333,6 +1333,7 @@ async def api_measure_roof(req: PhotoMeasureRequest, user: dict = Depends(get_cu
             "title": req.title or "Foto-Aufmaß",
             "type": "photo",
             "dimensions": result["dimensions"],
+            "obstacles": result.get("obstacles", []),
             "obstacle_area_m2": result["obstacle_area_m2"],
             "usable_area_m2": result["usable_area_m2"],
             "reference_meters": req.reference_meters,
@@ -1739,7 +1740,121 @@ async def api_blueprint_layers(user: dict = Depends(get_current_user)):
         "k2_compatible": True,
         "units": "meters",
         "dxf_version": "R2018",
+        "convention": "K2 Base — Direkt-Import ohne Umbenennen",
     }
+
+
+@app.post("/api/blueprint/validate")
+async def api_blueprint_validate(req: BlueprintRequest, user: dict = Depends(get_current_user)):
+    """
+    Plausibilitäts-Check: Prüft Maße, Sperrflächen-Lage, Walm-Konsistenz, Pitch.
+    Liefert Liste von Issues (error / warning / info).
+    """
+    data = await _resolve_blueprint_data(req)
+    issues = validate_blueprint(data)
+    return {
+        "ok": not has_blocking_errors(issues),
+        "errors":   [i.__dict__ for i in issues if i.severity == "error"],
+        "warnings": [i.__dict__ for i in issues if i.severity == "warning"],
+        "info":     [i.__dict__ for i in issues if i.severity == "info"],
+        "summary": {
+            "laenge": data.laenge, "breite": data.breite,
+            "first": data.first, "walm": data.walm,
+            "neigung": data.neigung, "obstacles": len(data.obstacles),
+            "modules": len(data.modules),
+            "is_hipped": data.is_hipped,
+        },
+    }
+
+
+# ---- "Magic Workflow": Photo-Audit → Blueprint ----
+@app.get("/api/photo-audits")
+async def api_list_photo_audits(user: dict = Depends(get_current_user)):
+    """Listet gespeicherte Foto-Aufmaße (KI-erkannte Sperrflächen inkl.)."""
+    cur = db.photo_audits.find({}, {"_id": 0}).sort("created_at", -1).limit(100)
+    return await cur.to_list(100)
+
+
+@app.post("/api/blueprint/from-photo-audit/{photo_audit_id}")
+async def api_blueprint_from_photo(
+    photo_audit_id: str,
+    fmt: str = "pdf",
+    user: dict = Depends(get_current_user),
+):
+    """
+    Magic-Workflow: Generiert direkt aus einem gespeicherten Photo-Audit
+    einen Blueprint, mit den KI-erkannten Sperrflächen als KEEPOUT-Zonen.
+    """
+    photo = await db.photo_audits.find_one({"id": photo_audit_id}, {"_id": 0})
+    if not photo:
+        raise HTTPException(404, "Photo-Audit nicht gefunden")
+
+    dims = photo.get("dimensions", {})
+    L = float(dims.get("laenge_m") or dims.get("laenge") or 10)
+    B = float(dims.get("breite_m") or dims.get("breite") or 8)
+
+    # Sperrflächen aus Photo-Audit (Pixel/Meter) in 0..1-Prozentwerte konvertieren
+    obstacles_pct = []
+    for o in (photo.get("obstacles") or []):
+        # Aus measure_roof: {x_m, y_m, width_m, height_m, area_m2}
+        if "x_m" in o:
+            obstacles_pct.append({
+                "type": o.get("type", "obstacle"),
+                "label": o.get("label"),
+                "x": float(o["x_m"]) / max(L, 0.01),
+                "y": float(o["y_m"]) / max(B, 0.01),
+                "w": float(o.get("width_m", 0.5)) / max(L, 0.01),
+                "h": float(o.get("height_m", 0.5)) / max(B, 0.01),
+            })
+
+    # Customer holen
+    customer = None
+    if photo.get("customer_id"):
+        customer = await db.customers.find_one({"id": photo["customer_id"]}, {"_id": 0})
+
+    audit_dict = {
+        "title": photo.get("title", "Foto-Aufmaß"),
+        "laenge": L, "breite": B,
+        "first": float(dims.get("first_m") or dims.get("first") or L * 0.9),
+        "walm": float(dims.get("walm_m") or dims.get("walm") or 0),
+        "neigung": float(dims.get("neigung") or 35),
+        "ausrichtung": dims.get("ausrichtung") or "Süd",
+    }
+    data = from_roof_audit(audit_dict, customer, obstacles_pct)
+
+    # Validierung VOR Export
+    issues = validate_blueprint(data)
+    if has_blocking_errors(issues):
+        return {
+            "ok": False,
+            "errors": [i.__dict__ for i in issues if i.severity == "error"],
+            "warnings": [i.__dict__ for i in issues if i.severity == "warning"],
+        }
+
+    fmt = fmt.lower()
+    try:
+        if fmt == "dxf":
+            content = generate_dxf(data)
+            return Response(content=content, media_type="application/dxf",
+                            headers={"Content-Disposition": f"attachment; filename=\"Blueprint_{data.project_title}.dxf\""})
+        elif fmt == "pdf":
+            content = generate_pdf_blueprint(data)
+            return Response(content=content, media_type="application/pdf",
+                            headers={"Content-Disposition": f"inline; filename=\"Blueprint_{data.project_title}.pdf\""})
+        elif fmt == "png":
+            content = generate_png_topdown(data)
+            return Response(content=content, media_type="image/png",
+                            headers={"Content-Disposition": f"inline; filename=\"Blueprint_{data.project_title}.png\""})
+        elif fmt == "obj":
+            obj_b, mtl_b = generate_obj(data)
+            return {"obj": obj_b.decode(), "mtl": mtl_b.decode(),
+                    "filename_obj": f"{data.project_title}.obj",
+                    "filename_mtl": f"{data.project_title}.mtl"}
+        else:
+            raise HTTPException(400, f"Format '{fmt}' nicht unterstützt (pdf/dxf/png/obj).")
+    except Exception as e:
+        logger.exception("Magic-Workflow Generation failed")
+        raise HTTPException(500, f"Generation fehlgeschlagen: {e}")
 
 
 @app.post("/api/blueprint/push-hero")

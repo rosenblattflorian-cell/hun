@@ -24,14 +24,14 @@ Alle Längen in Metern. Koordinatensystem: Top-Down (Vogelperspektive),
 Ursprung links-unten am Dach (Traufe), x=Trauflänge, y=Tiefe.
 
 K2-Base-Layer-Konvention (DXF):
-  ROOF_OUTLINE     (1, red)    — Außenkontur Dach
-  ROOF_RIDGE       (5, blue)   — First
-  ROOF_EAVES       (3, green)  — Traufe
-  ROOF_HIPS        (6, mag)    — Walm
-  DIMENSIONS       (2, yellow) — Bemaßungspfeile + Texte
-  KEEPOUT_OBSTACLES(1, red)    — VERBOTSZONEN (Solid Hatch)
-  TEXT_LABELS      (7, white)  — Labels
-  PV_MODULES       (4, cyan)   — geplante Module
+  K2_OUTLINE       (1, red)    — Außenkontur Dach
+  K2_RIDGE         (5, blue)   — First
+  K2_EAVE          (3, green)  — Traufe
+  K2_HIP           (6, mag)    — Walm
+  K2_DIM           (2, yellow) — Bemaßungspfeile + Texte
+  K2_OBSTACLE      (1, red)    — VERBOTSZONEN (Solid Hatch)
+  K2_LABEL         (7, white)  — Labels
+  K2_MODULE        (4, cyan)   — geplante Module
 """
 
 from __future__ import annotations
@@ -49,6 +49,115 @@ from reportlab.lib.units import mm
 from reportlab.lib.colors import Color, black, white, HexColor
 
 logger = logging.getLogger("blueprint")
+
+# ====================== PLAUSIBILITÄTS-VALIDATOR ======================
+# Prüft Geometrie-Konsistenz vor dem Export — verhindert "kaputte" DXFs.
+
+class BlueprintValidationError(Exception):
+    pass
+
+@dataclass
+class ValidationIssue:
+    severity: str       # "error" | "warning" | "info"
+    code: str
+    message: str
+    field: Optional[str] = None
+
+def validate_blueprint(data: "RoofBlueprintData") -> List[ValidationIssue]:
+    """
+    Plausibilitäts-Check für Roof-Daten und Sperrflächen.
+    Gibt eine Liste von Issues zurück (errors blocken, warnings nur informativ).
+    """
+    issues: List[ValidationIssue] = []
+
+    L, B, F, W = data.laenge, data.breite, data.first, data.walm
+
+    # --- Maße im realistischen Rahmen ---
+    if L <= 0 or B <= 0 or F <= 0:
+        issues.append(ValidationIssue("error", "DIM_NEGATIVE",
+            "Trauflänge, Tiefe und First müssen > 0 sein.", "laenge"))
+    if L < 1 or L > 100:
+        issues.append(ValidationIssue("warning", "DIM_OUT_OF_RANGE",
+            f"Trauflänge {L}m liegt außerhalb des plausiblen Bereichs (1–100m).", "laenge"))
+    if B < 1 or B > 50:
+        issues.append(ValidationIssue("warning", "DIM_OUT_OF_RANGE",
+            f"Tiefe {B}m liegt außerhalb des plausiblen Bereichs (1–50m).", "breite"))
+
+    # --- First darf nicht länger als Trauflänge sein (außer bei Pultdach) ---
+    if F > L + 0.05:
+        issues.append(ValidationIssue("error", "RIDGE_LONGER_THAN_EAVE",
+            f"First ({F}m) ist länger als Trauflänge ({L}m). Geometrisch unmöglich.", "first"))
+
+    # --- Walm-Konsistenz ---
+    if W > 0 and F >= L - 0.01:
+        issues.append(ValidationIssue("warning", "WALM_BUT_NO_OFFSET",
+            "Walmdach angegeben, aber First gleich Trauflänge — keine Walm-Verkürzung.", "walm"))
+    if W < 0:
+        issues.append(ValidationIssue("error", "WALM_NEGATIVE",
+            f"Walm darf nicht negativ sein ({W}m).", "walm"))
+    if W > B / 2:
+        issues.append(ValidationIssue("warning", "WALM_TOO_DEEP",
+            f"Walm ({W}m) ist tiefer als die halbe Dach-Tiefe ({B/2}m).", "walm"))
+
+    # --- Pitch-Plausibilität ---
+    if data.neigung < 0 or data.neigung > 75:
+        issues.append(ValidationIssue("error", "PITCH_OUT_OF_RANGE",
+            f"Pitch {data.neigung}° unrealistisch (gültig: 0–75°).", "neigung"))
+    elif data.neigung < 5:
+        issues.append(ValidationIssue("info", "PITCH_FLAT",
+            f"Pitch {data.neigung}° ist quasi-flach — Sonderkonstruktion?", "neigung"))
+
+    # --- Sperrflächen müssen INNERHALB der Dachfläche liegen ---
+    for i, obs in enumerate(data.obstacles):
+        if obs.x_m < -0.01 or obs.y_m < -0.01:
+            issues.append(ValidationIssue("error", "OBSTACLE_OUTSIDE_NEG",
+                f"Sperrfläche #{i+1} ({obs.label or obs.type}) liegt außerhalb (x={obs.x_m:.2f}, y={obs.y_m:.2f}).",
+                f"obstacle[{i}]"))
+        if obs.x_m + obs.w_m > L + 0.01:
+            issues.append(ValidationIssue("error", "OBSTACLE_OVERFLOW_X",
+                f"Sperrfläche #{i+1} ({obs.label or obs.type}) ragt rechts aus dem Dach heraus "
+                f"({obs.x_m + obs.w_m:.2f}m > Trauflänge {L}m).",
+                f"obstacle[{i}]"))
+        if obs.y_m + obs.h_m > B + 0.01:
+            issues.append(ValidationIssue("error", "OBSTACLE_OVERFLOW_Y",
+                f"Sperrfläche #{i+1} ({obs.label or obs.type}) ragt nach hinten aus dem Dach "
+                f"({obs.y_m + obs.h_m:.2f}m > Tiefe {B}m).",
+                f"obstacle[{i}]"))
+        if obs.w_m <= 0 or obs.h_m <= 0:
+            issues.append(ValidationIssue("error", "OBSTACLE_ZERO_SIZE",
+                f"Sperrfläche #{i+1} hat Größe 0 (w={obs.w_m}, h={obs.h_m}).",
+                f"obstacle[{i}]"))
+        # Sperrfläche darf nicht > 60% der Dachfläche sein
+        ratio = (obs.w_m * obs.h_m) / max(L * B, 0.01)
+        if ratio > 0.6:
+            issues.append(ValidationIssue("warning", "OBSTACLE_HUGE",
+                f"Sperrfläche #{i+1} belegt {ratio*100:.0f}% des Daches — wirkt unrealistisch.",
+                f"obstacle[{i}]"))
+
+    # --- Sperrflächen-Überschneidungen ---
+    for i in range(len(data.obstacles)):
+        for j in range(i + 1, len(data.obstacles)):
+            a, b = data.obstacles[i], data.obstacles[j]
+            if (a.x_m < b.x_m + b.w_m and a.x_m + a.w_m > b.x_m and
+                a.y_m < b.y_m + b.h_m and a.y_m + a.h_m > b.y_m):
+                issues.append(ValidationIssue("warning", "OBSTACLE_OVERLAP",
+                    f"Sperrflächen #{i+1} ({a.label or a.type}) und #{j+1} ({b.label or b.type}) überlappen sich.",
+                    None))
+
+    # --- PV-Module dürfen nicht IN Sperrflächen liegen ---
+    for k, m in enumerate(data.modules):
+        for i, obs in enumerate(data.obstacles):
+            if (m.x_m < obs.x_m + obs.w_m and m.x_m + m.w_m > obs.x_m and
+                m.y_m < obs.y_m + obs.h_m and m.y_m + m.h_m > obs.y_m):
+                issues.append(ValidationIssue("error", "MODULE_IN_KEEPOUT",
+                    f"Modul #{k+1} liegt in Sperrfläche #{i+1} ({obs.label or obs.type}).",
+                    f"module[{k}]"))
+
+    return issues
+
+def has_blocking_errors(issues: List[ValidationIssue]) -> bool:
+    return any(i.severity == "error" for i in issues)
+
 
 # ====================== DOMAIN MODEL ======================
 
@@ -94,17 +203,18 @@ class RoofBlueprintData:
 
 
 # ====================== DXF (CAD) EXPORT ======================
-# K2-Base-konformer Layer-Aufbau
+# K2-Base-konformer Layer-Aufbau (Goldstandard für K2-Importe)
+# Diese Layer-Namen werden von K2 Base ohne Umbenennen direkt erkannt.
 
 DXF_LAYERS = {
-    "ROOF_OUTLINE":      {"color": 1,  "lineweight": 50},   # red, dick
-    "ROOF_RIDGE":        {"color": 5,  "lineweight": 35},   # blue
-    "ROOF_EAVES":        {"color": 3,  "lineweight": 35},   # green
-    "ROOF_HIPS":         {"color": 6,  "lineweight": 35},   # magenta
-    "DIMENSIONS":        {"color": 2,  "lineweight": 18},   # yellow
-    "KEEPOUT_OBSTACLES": {"color": 1,  "lineweight": 50},   # red — VERBOTSZONE
-    "TEXT_LABELS":       {"color": 7,  "lineweight": 18},   # white
-    "PV_MODULES":        {"color": 4,  "lineweight": 25},   # cyan
+    "K2_OUTLINE":   {"color": 1,  "lineweight": 50},   # red, dick — Außenkontur Dach
+    "K2_RIDGE":     {"color": 5,  "lineweight": 35},   # blue       — First
+    "K2_EAVE":      {"color": 3,  "lineweight": 35},   # green      — Traufe
+    "K2_HIP":       {"color": 6,  "lineweight": 35},   # magenta    — Walm
+    "K2_DIM":       {"color": 2,  "lineweight": 18},   # yellow     — Bemaßungen
+    "K2_OBSTACLE":  {"color": 1,  "lineweight": 50},   # red        — VERBOTSZONE (KEEP-OUT)
+    "K2_LABEL":     {"color": 7,  "lineweight": 18},   # white      — Beschriftungen
+    "K2_MODULE":    {"color": 4,  "lineweight": 25},   # cyan       — geplante Module
 }
 
 
@@ -151,28 +261,27 @@ def generate_dxf(data: RoofBlueprintData) -> bytes:
         ]
     else:
         outline = [(0, 0), (L, 0), (L, B), (0, B), (0, 0)]
-    msp.add_lwpolyline(outline, dxfattribs={"layer": "ROOF_OUTLINE", "closed": True})
+    msp.add_lwpolyline(outline, dxfattribs={"layer": "K2_OUTLINE", "closed": True})
 
     # ---- 2) Eaves / Ridge / Hips als separate Linien ----
-    msp.add_line((0, 0), (L, 0), dxfattribs={"layer": "ROOF_EAVES"})
+    msp.add_line((0, 0), (L, 0), dxfattribs={"layer": "K2_EAVE"})
     if data.is_hipped and W > 0:
         offset = (L - F) / 2 if F < L else 0
-        msp.add_line((offset, B), (L - offset, B), dxfattribs={"layer": "ROOF_RIDGE"})
-        msp.add_line((0, 0), (offset, B), dxfattribs={"layer": "ROOF_HIPS"})
-        msp.add_line((L, 0), (L - offset, B), dxfattribs={"layer": "ROOF_HIPS"})
+        msp.add_line((offset, B), (L - offset, B), dxfattribs={"layer": "K2_RIDGE"})
+        msp.add_line((0, 0), (offset, B), dxfattribs={"layer": "K2_HIP"})
+        msp.add_line((L, 0), (L - offset, B), dxfattribs={"layer": "K2_HIP"})
     else:
-        msp.add_line((0, B), (L, B), dxfattribs={"layer": "ROOF_RIDGE"})
+        msp.add_line((0, B), (L, B), dxfattribs={"layer": "K2_RIDGE"})
 
-    # ---- 3) PV_MODULES (geplante Belegung) ----
+    # ---- 3) K2_MODULE (geplante Belegung) ----
     for m in data.modules:
-        _polyline_rect(msp, m.x_m, m.y_m, m.w_m, m.h_m, "PV_MODULES")
+        _polyline_rect(msp, m.x_m, m.y_m, m.w_m, m.h_m, "K2_MODULE")
 
-    # ---- 4) KEEPOUT_OBSTACLES — DAS ESSENZIELLE FEATURE ----
-    # K2-Base liest diesen Layer und exkludiert die Bereiche aus der Belegung.
+    # ---- 4) K2_OBSTACLE — KEEP-OUT ZONEN (Killer-Feature) ----
+    # K2 Base liest diesen Layer und exkludiert die Bereiche aus der Modul-Belegung.
     for obs in data.obstacles:
-        # Polyline + Hatching (Solid Fill) damit es als Zone sichtbar ist
-        _polyline_rect(msp, obs.x_m, obs.y_m, obs.w_m, obs.h_m, "KEEPOUT_OBSTACLES")
-        hatch = msp.add_hatch(color=1, dxfattribs={"layer": "KEEPOUT_OBSTACLES"})
+        _polyline_rect(msp, obs.x_m, obs.y_m, obs.w_m, obs.h_m, "K2_OBSTACLE")
+        hatch = msp.add_hatch(color=1, dxfattribs={"layer": "K2_OBSTACLE"})
         hatch.set_pattern_fill("ANSI31", scale=0.05)
         hatch.paths.add_polyline_path(
             [(obs.x_m, obs.y_m),
@@ -181,62 +290,56 @@ def generate_dxf(data: RoofBlueprintData) -> bytes:
              (obs.x_m, obs.y_m + obs.h_m)],
             is_closed=True,
         )
-        # Label
         label = obs.label or obs.type.upper()
         msp.add_text(
-            f"KEEPOUT: {label}",
-            dxfattribs={"layer": "TEXT_LABELS", "height": 0.15, "color": 7},
+            f"KEEP-OUT: {label}",
+            dxfattribs={"layer": "K2_LABEL", "height": 0.15, "color": 7},
         ).set_placement(
             (obs.x_m + obs.w_m / 2, obs.y_m + obs.h_m / 2),
             align=TextEntityAlignment.MIDDLE_CENTER,
         )
 
-    # ---- 5) DIMENSIONS — Maßketten ----
-    # Trauflänge (unten)
+    # ---- 5) K2_DIM — Maßketten ----
     dim1 = msp.add_aligned_dim(
         p1=(0, -1.0), p2=(L, -1.0), distance=0.4,
-        dxfattribs={"layer": "DIMENSIONS"},
+        dxfattribs={"layer": "K2_DIM"},
     )
     dim1.render()
-    # First (oben)
     if data.is_hipped:
         offset = (L - F) / 2 if F < L else 0
         dim_first = msp.add_aligned_dim(
             p1=(offset, B + 1.0), p2=(L - offset, B + 1.0), distance=0.4,
-            dxfattribs={"layer": "DIMENSIONS"},
+            dxfattribs={"layer": "K2_DIM"},
         )
         dim_first.render()
-    # Tiefe links
     dim2 = msp.add_aligned_dim(
         p1=(-1.0, 0), p2=(-1.0, B), distance=0.4,
-        dxfattribs={"layer": "DIMENSIONS"},
+        dxfattribs={"layer": "K2_DIM"},
     )
     dim2.render()
 
-    # ---- 6) TEXT_LABELS — Pitch, Ausrichtung, Norden ----
+    # ---- 6) K2_LABEL — Pitch, Ausrichtung, Norden ----
     msp.add_text(
         f"PITCH: {data.neigung}°  |  AUSRICHTUNG: {data.ausrichtung}",
-        dxfattribs={"layer": "TEXT_LABELS", "height": 0.25, "color": 7},
+        dxfattribs={"layer": "K2_LABEL", "height": 0.25, "color": 7},
     ).set_placement((L / 2, B + 2.5), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Nordpfeil (vereinfacht als Linie + N-Text)
     nx, ny = L + 2.5, B / 2
-    msp.add_line((nx, ny - 1), (nx, ny + 1), dxfattribs={"layer": "TEXT_LABELS"})
-    msp.add_line((nx, ny + 1), (nx - 0.3, ny + 0.5), dxfattribs={"layer": "TEXT_LABELS"})
-    msp.add_line((nx, ny + 1), (nx + 0.3, ny + 0.5), dxfattribs={"layer": "TEXT_LABELS"})
+    msp.add_line((nx, ny - 1), (nx, ny + 1), dxfattribs={"layer": "K2_LABEL"})
+    msp.add_line((nx, ny + 1), (nx - 0.3, ny + 0.5), dxfattribs={"layer": "K2_LABEL"})
+    msp.add_line((nx, ny + 1), (nx + 0.3, ny + 0.5), dxfattribs={"layer": "K2_LABEL"})
     msp.add_text(
         "N",
-        dxfattribs={"layer": "TEXT_LABELS", "height": 0.4, "color": 7},
+        dxfattribs={"layer": "K2_LABEL", "height": 0.4, "color": 7},
     ).set_placement((nx, ny + 1.4), align=TextEntityAlignment.MIDDLE_CENTER)
 
-    # Titel-Block (unten links)
     msp.add_text(
         f"SOLAR MITTE  |  {data.project_title}",
-        dxfattribs={"layer": "TEXT_LABELS", "height": 0.3, "color": 7},
+        dxfattribs={"layer": "K2_LABEL", "height": 0.3, "color": 7},
     ).set_placement((0, -3), align=TextEntityAlignment.LEFT)
     msp.add_text(
         f"Kunde: {data.customer_name}   |   {data.address}",
-        dxfattribs={"layer": "TEXT_LABELS", "height": 0.2, "color": 7},
+        dxfattribs={"layer": "K2_LABEL", "height": 0.2, "color": 7},
     ).set_placement((0, -3.6), align=TextEntityAlignment.LEFT)
 
     # Output to bytes

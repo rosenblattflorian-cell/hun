@@ -32,6 +32,24 @@ type Audit = {
   customer_id?: string; customer_name?: string;
 };
 
+type PhotoAudit = {
+  id: string;
+  title: string;
+  customer_id?: string;
+  dimensions: any;
+  obstacles: any[];
+  obstacle_area_m2?: number;
+  usable_area_m2?: number;
+  created_at: string;
+};
+
+type ValidationIssue = {
+  severity: "error" | "warning" | "info";
+  code: string;
+  message: string;
+  field?: string;
+};
+
 type Obstacle = {
   type: string; x: number; y: number; w: number; h: number; label?: string;
   // x,y,w,h sind 0..1 RELATIV zur Dachfläche
@@ -63,18 +81,25 @@ const FORMATS = [
 export default function BlueprintScreen() {
   const router = useRouter();
   const [audits, setAudits] = useState<Audit[]>([]);
+  const [photoAudits, setPhotoAudits] = useState<PhotoAudit[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [pushing, setPushing] = useState(false);
   const [showInline, setShowInline] = useState(false);
+  const [validation, setValidation] = useState<{
+    errors: ValidationIssue[]; warnings: ValidationIssue[]; info: ValidationIssue[];
+  }>({ errors: [], warnings: [], info: [] });
   const [inline, setInline] = useState({
     title: "Neues Dach", laenge: "12", breite: "10", first: "10",
     walm: "0", neigung: "35", ausrichtung: "Süd",
   });
 
   const load = async () => {
-    try { setAudits(await apiGet<Audit[]>("/roof-audits")); } catch {}
+    try {
+      setAudits(await apiGet<Audit[]>("/roof-audits"));
+      setPhotoAudits(await apiGet<PhotoAudit[]>("/photo-audits"));
+    } catch {}
   };
   useFocusEffect(useCallback(() => { load(); }, []));
 
@@ -105,12 +130,31 @@ export default function BlueprintScreen() {
       Alert.alert("Hinweis", "Bitte ein Aufmaß auswählen oder Werte manuell eingeben.");
       return;
     }
+    // 1) Plausibilitäts-Check VOR dem Download
+    try {
+      const v = await apiPost<any>("/blueprint/validate", body);
+      setValidation({ errors: v.errors || [], warnings: v.warnings || [], info: v.info || [] });
+      if (!v.ok) {
+        Alert.alert(
+          "Plausibilitäts-Fehler",
+          v.errors.map((e: any) => `• ${e.message}`).join("\n") +
+          "\n\nBitte korrigieren — Export wurde abgebrochen.",
+        );
+        return;
+      }
+      if (v.warnings && v.warnings.length > 0) {
+        // Warnungen nur loggen, nicht blocken
+        console.log("Blueprint-Warnungen:", v.warnings);
+      }
+    } catch (e: any) {
+      Alert.alert("Validate-Fehler", e.message);
+      return;
+    }
     setBusy(fmt.key);
     try {
       if (fmt.key === "obj") {
         const r = await apiPost<any>(fmt.endpoint, body);
         triggerDownloadText(r.obj, r.filename_obj, "model/obj");
-        // MTL als zweite Datei
         setTimeout(() => triggerDownloadText(r.mtl, r.filename_mtl, "model/mtl"), 600);
         Alert.alert("OBJ + MTL erstellt", `${r.filename_obj}\n+ ${r.filename_mtl}\n\nFür Blender/SketchUp.`);
       } else {
@@ -123,6 +167,38 @@ export default function BlueprintScreen() {
     } catch (e: any) {
       Alert.alert("Fehler", e.message || "Generierung fehlgeschlagen");
     } finally { setBusy(null); }
+  };
+
+  /** Magic-Workflow: Foto-Audit laden — übernimmt Maße + KI-Sperrflächen */
+  const loadFromPhotoAudit = (pa: PhotoAudit) => {
+    const dims = pa.dimensions || {};
+    const L = parseFloat(dims.laenge_m || dims.laenge || 10);
+    const B = parseFloat(dims.breite_m || dims.breite || 8);
+    setInline({
+      title: pa.title || "Foto-Aufmaß",
+      laenge: String(L),
+      breite: String(B),
+      first: String(dims.first_m || dims.first || L * 0.9),
+      walm: String(dims.walm_m || dims.walm || 0),
+      neigung: String(dims.neigung || 35),
+      ausrichtung: dims.ausrichtung || "Süd",
+    });
+    // Sperrflächen aus KI-Detection in 0..1 Prozent konvertieren
+    const newObs: Obstacle[] = (pa.obstacles || []).map((o: any) => ({
+      type: o.type || "obstacle",
+      label: o.label || o.type || "Hindernis",
+      x: (o.x_m || 0) / Math.max(L, 0.01),
+      y: (o.y_m || 0) / Math.max(B, 0.01),
+      w: (o.width_m || 0.5) / Math.max(L, 0.01),
+      h: (o.height_m || 0.5) / Math.max(B, 0.01),
+    }));
+    setObstacles(newObs);
+    setShowInline(true);
+    setSelectedId(null);
+    Alert.alert(
+      "Foto-Audit geladen",
+      `${L}×${B}m · ${newObs.length} KI-erkannte Sperrfläche${newObs.length === 1 ? "" : "n"} übernommen.\n\nDiese landen automatisch im KEEPOUT-Layer beim Export.`,
+    );
   };
 
   const pushToHero = async () => {
@@ -175,6 +251,36 @@ export default function BlueprintScreen() {
               <Text style={s.proBadgeT}>PRO</Text>
             </View>
           </View>
+
+          {/* Magic Workflow: Foto-Audit → Blueprint */}
+          {photoAudits.length > 0 && (
+            <View style={s.magicBox}>
+              <View style={s.magicHead}>
+                <Ionicons name="sparkles" size={16} color={colors.accent} />
+                <Text style={s.magicT}>FOTO → BLUEPRINT MAGIC</Text>
+              </View>
+              <Text style={s.magicSub}>
+                {photoAudits.length} Foto-Aufmaß{photoAudits.length === 1 ? "" : "e"} mit
+                KI-erkannten Sperrflächen verfügbar. Mit einem Klick als KEEPOUT-Zonen übernehmen.
+              </Text>
+              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                {photoAudits.slice(0, 5).map(pa => (
+                  <TouchableOpacity
+                    key={pa.id}
+                    testID={`photo-audit-${pa.id}`}
+                    onPress={() => loadFromPhotoAudit(pa)}
+                    style={s.photoChip}
+                  >
+                    <Ionicons name="camera" size={12} color={colors.accent} />
+                    <Text style={s.photoChipT}>{pa.title}</Text>
+                    <View style={s.photoBadge}>
+                      <Text style={s.photoBadgeT}>{pa.obstacles?.length || 0} ⚠️</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
 
           {/* Step 1: Audit auswählen */}
           <Section title="1 · Aufmaß wählen" icon="layers">
@@ -327,22 +433,26 @@ export default function BlueprintScreen() {
 
           {/* DXF-Layer-Info */}
           <View style={s.layerInfo}>
-            <Text style={s.layerHead}>DXF-LAYER (K2-Base-konform)</Text>
+            <Text style={s.layerHead}>DXF-LAYER (K2-Base-Konvention · Goldstandard)</Text>
             {[
-              ["ROOF_OUTLINE",      "Außenkontur Dach"],
-              ["ROOF_RIDGE",        "First"],
-              ["ROOF_EAVES",        "Traufe"],
-              ["ROOF_HIPS",         "Walm"],
-              ["DIMENSIONS",        "Bemaßungen"],
-              ["KEEPOUT_OBSTACLES", "Sperrflächen ⚠️"],
-              ["TEXT_LABELS",       "Beschriftungen"],
-              ["PV_MODULES",        "PV-Belegung"],
+              ["K2_OUTLINE",  "Außenkontur Dach"],
+              ["K2_RIDGE",    "First"],
+              ["K2_EAVE",     "Traufe"],
+              ["K2_HIP",      "Walm"],
+              ["K2_DIM",      "Bemaßungen"],
+              ["K2_OBSTACLE", "Sperrflächen ⚠️ (KEEP-OUT)"],
+              ["K2_LABEL",    "Beschriftungen"],
+              ["K2_MODULE",   "PV-Belegung"],
             ].map(([n, d]) => (
               <View key={n} style={s.layerRow}>
                 <Text style={s.layerName}>{n}</Text>
                 <Text style={s.layerDesc}>{d}</Text>
               </View>
             ))}
+            <Text style={s.layerNote}>
+              ✓ Direktimport in K2 Base ohne Umbenennen{"\n"}
+              ✓ Einheit: Meter · DXF Version R2018
+            </Text>
           </View>
 
         </ScrollView>
@@ -446,4 +556,23 @@ const s = StyleSheet.create({
   layerRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: colors.border },
   layerName: { color: colors.primary, fontSize: 11, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", fontWeight: "700" },
   layerDesc: { color: colors.textSecondary, fontSize: 11 },
+  layerNote: { color: colors.textSecondary, fontSize: 10, marginTop: 8, lineHeight: 14, fontStyle: "italic" },
+
+  magicBox: {
+    padding: spacing.md, borderRadius: 14,
+    backgroundColor: colors.accentGlow,
+    borderWidth: 2, borderColor: colors.accent,
+    marginBottom: spacing.sm,
+  },
+  magicHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  magicT: { color: colors.accent, fontSize: 11, fontWeight: "900", letterSpacing: 1.2 },
+  magicSub: { color: colors.textPrimary, fontSize: 12, marginTop: 6, lineHeight: 17 },
+  photoChip: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
+    borderWidth: 1, borderColor: colors.accent, backgroundColor: colors.bgDeep,
+  },
+  photoChipT: { color: colors.textPrimary, fontSize: 12, fontWeight: "700" },
+  photoBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 999, backgroundColor: colors.accent, marginLeft: 4 },
+  photoBadgeT: { color: "#000", fontSize: 9, fontWeight: "900" },
 });
