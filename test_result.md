@@ -126,7 +126,104 @@ backend:
               - Legende um "ERKANNTE BAUTEILE"-Liste erweitert (ID-Code + Label, monospace)
             Visuell durch KI-Analyse bestätigt: 95% confidence, Profi-Bauplan-Niveau.
 
-  - task: "Frontend Guardian-Validation-Banner"
+  - task: "Universal Roof Engine — Trigonometrie + Gerüst-Kalkulation"
+    implemented: true
+    working: "NA"
+    file: "backend/roof_engine.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Neue Module roof_engine.py:
+              compute_roof_geometry(α, h_T, h_F, W, walm_offset) →
+                L = (h_F-h_T) / sin(α), Tiefe = L·cos(α), Δh = h_F - h_T
+                Auto-Erkennung: Sattel | Pult | Walm | Flach (Heuristik via W-Tiefe-Verhältnis)
+                Geneigte Fläche, Grundriss-Fläche, Sparrenlänge
+              calculate_scaffolding(h_T, W) →
+                Gerüst-Höhe = h_T + 0.7m (DIN/ArbSchG Sicherheits-Überstand)
+                Gerüst-Länge = W + 2m (1m je Seite)
+                Fläche = h × l, Kostenrahmen €6-9/m², Aufbau-Dauer 0.5d/50m²
+                Lastklasse "3 (PV-Standard, ≤ 200 kg/m²)"
+                Norm: DIN EN 12811 / ArbSchG / TRBS 2121-1
+              rectify_obstacles(geometry, obstacles_pct) →
+                konvertiert KI-Hindernisse aus 0..1-Prozent in echte Meter-Koordinaten
+              scaffolding_to_bom_item(scaff) →
+                Direkt in HERO-Angebots-Position konvertierbar
+
+            Endpoints:
+              POST /api/roof-engine/compute       → Geometrie + Gerüst + BOM
+              POST /api/roof-engine/scaffolding   → Nur Gerüst-Kalkulation
+              POST /api/roof-engine/push-hero     → Sync mit HERO (mock, sync-log Entry)
+
+            Smoke-Tests:
+              Sattel α=35°, h_T=4.5, h_F=7.5, W=12.5  →  L=5.23m, Tiefe=8.569m,
+                Fläche=130.76m², Gerüst=75.4m², €452-679, 0.75 Tage
+              Walm walm_offset=1.5  →  Type "walmdach" korrekt erkannt
+              HERO Push: 200 OK, sync-log Entry persistiert
+
+  - task: "Frontend Universal Engine UI im Blueprint-Screen"
+    implemented: true
+    working: true
+    file: "frontend/app/blueprint.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Neue Sektion "UNIVERSAL ROOF ENGINE" oben im Blueprint-Screen (PRO-Badge):
+              4 Eingaben (α, W, h_T, h_F) → "Berechnen + Übernehmen" Button
+              Ergebnis-Cards: Dachtyp, Sparrenlänge, Tiefe, Fläche, Δh
+              Gerüst-Block (gelb): Höhe, Länge, Fläche, Kostenrahmen, Aufbau-Dauer, Lastklasse, Norm
+              "Gerüst-BOM an HERO pushen" Button (Apple-Yellow)
+              Berechnete Werte werden automatisch in inline-Felder übernommen → 1-Klick-Blueprint
+            Visuell verifiziert via Screenshot: Sattel 35°/12.5m → 5.23m Sparre, 75.4m² Gerüst, €452-679.
+
+  - task: "Customer-Login + 3D-Twin Setup (Familie Schmidt)"
+    implemented: true
+    working: true
+    file: "backend (manual seed)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: false
+          agent: "main"
+          comment: "Initial passlib bcrypt-Issue — falsche DB (test_database vs solar_crm)."
+        - working: true
+          agent: "main"
+          comment: |
+            FIXED: User direkt mit bcrypt + DB_NAME=solar_crm angelegt.
+            Customer-User: kunde@solar-mitte.de / kunde123
+            Customer-Record: "Familie Schmidt", Berlin
+            Roof-Audit: Schmidt Hauptdach (12.5×10m, Walm 1.5m, Pitch 38°)
+            Project: Schmidt PV-Anlage (10.5kWp)
+            Login-Test: 200 OK mit role="customer"
+
+  - task: "Customer Portal — 3D-Twin (Three.js Web + PNG Mobile)"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/RoofViewer3D.tsx, frontend/app/kunde/index.tsx, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            RoofViewer3D als universelle Komponente:
+              Web: react-three-fiber Canvas mit Auto-Rotation, ambient + directional Lights,
+                axesHelper, gridHelper, MeshStandardMaterial (Roof-Brown), Y-Up-Konversion
+                aus OBJ-Format, Quad→Triangle-Konversion für BufferGeometry.
+              Native Mobile: PNG-Fallback (Top-Down) via /api/blueprint/png mit base64-DataURI
+            Backend: GET /api/portal/my erweitert um blueprint_audit_id + audits[] Liste.
+            Frontend: kunde/index.tsx zeigt "Mein digitales Dach" Sektion mit 3D-TWIN Badge,
+            Hint-Text je nach Platform.
+
     implemented: true
     working: true
     file: "frontend/app/blueprint.tsx"

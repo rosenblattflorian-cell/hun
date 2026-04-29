@@ -78,6 +78,29 @@ const FORMATS = [
     desc: "Hochauflösendes Top-Down-Bild" },
 ];
 
+type ScaffoldingResult = {
+  hoehe_geruest_m: number;
+  laenge_geruest_m: number;
+  flaeche_m2: number;
+  estimate_eur_min: number;
+  estimate_eur_max: number;
+  lastklasse: string;
+  norm: string;
+  aufbau_dauer_tage: number;
+};
+
+type GeometryResult = {
+  alpha_deg: number;
+  h_traufe: number; h_first: number;
+  breite_traufe: number;
+  sparrenlaenge_m: number;
+  tiefe_horizontal_m: number;
+  hoehe_dach_m: number;
+  flaeche_geneigt_m2: number;
+  flaeche_grundriss_m2: number;
+  suggested_type: "satteldach" | "pultdach" | "walmdach" | "flachdach";
+};
+
 export default function BlueprintScreen() {
   const router = useRouter();
   const [audits, setAudits] = useState<Audit[]>([]);
@@ -90,6 +113,11 @@ export default function BlueprintScreen() {
   const [validation, setValidation] = useState<{
     errors: ValidationIssue[]; warnings: ValidationIssue[]; info: ValidationIssue[];
   }>({ errors: [], warnings: [], info: [] });
+  // Universal Roof Engine
+  const [showEngine, setShowEngine] = useState(false);
+  const [eng, setEng] = useState({ alpha: "35", h_t: "4.5", h_f: "7.5", w: "12.5" });
+  const [engResult, setEngResult] = useState<{ geometry: GeometryResult; scaffolding: ScaffoldingResult } | null>(null);
+  const [engBusy, setEngBusy] = useState(false);
   const [inline, setInline] = useState({
     title: "Neues Dach", laenge: "12", breite: "10", first: "10",
     walm: "0", neigung: "35", ausrichtung: "Süd",
@@ -140,6 +168,50 @@ export default function BlueprintScreen() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, showInline, JSON.stringify(obstacles), JSON.stringify(inline)]);
+
+  /** Universal Roof Engine: 3 Eingaben → Geometrie + Gerüst */
+  const computeEngine = async () => {
+    setEngBusy(true);
+    try {
+      const r = await apiPost<any>("/roof-engine/compute", {
+        alpha_deg: parseFloat(eng.alpha) || 0,
+        h_traufe: parseFloat(eng.h_t) || 0,
+        h_first: parseFloat(eng.h_f) || 0,
+        breite_traufe: parseFloat(eng.w) || 0,
+        obstacles_pct: obstacles,
+      });
+      setEngResult({ geometry: r.geometry, scaffolding: r.scaffolding });
+      // Übernehme berechnete Werte in inline-Felder für Blueprint
+      setInline(s => ({
+        ...s,
+        title: `Engine ${r.geometry.suggested_type} ${r.geometry.alpha_deg}°`,
+        laenge: String(r.geometry.breite_traufe),
+        breite: String(r.geometry.tiefe_horizontal_m),
+        first: String(r.geometry.breite_traufe),
+        walm: "0",
+        neigung: String(r.geometry.alpha_deg),
+      }));
+      setShowInline(true);
+      setSelectedId(null);
+    } catch (e: any) {
+      Alert.alert("Engine-Fehler", e.message);
+    } finally { setEngBusy(false); }
+  };
+
+  const pushEngineToHero = async () => {
+    try {
+      const r = await apiPost<any>("/roof-engine/push-hero", {
+        alpha_deg: parseFloat(eng.alpha) || 0,
+        h_traufe: parseFloat(eng.h_t) || 0,
+        h_first: parseFloat(eng.h_f) || 0,
+        breite_traufe: parseFloat(eng.w) || 0,
+      });
+      Alert.alert(
+        r.is_mock ? "HERO Sync (MOCK)" : "HERO Sync",
+        `Roof-Geometrie + Gerüst-BOM (${r.scaffolding_summary.m2}m², €${r.scaffolding_summary.eur_range}) an HERO-Akte gepusht.`,
+      );
+    } catch (e: any) { Alert.alert("Fehler", e.message); }
+  };
 
   const downloadFormat = async (fmt: typeof FORMATS[0]) => {
     const body = buildRequestBody();
@@ -267,6 +339,106 @@ export default function BlueprintScreen() {
             <View style={s.proBadge}>
               <Text style={s.proBadgeT}>PRO</Text>
             </View>
+          </View>
+
+          {/* Universal Roof Engine — Trigonometrie + Gerüst */}
+          <View style={s.engineBox}>
+            <TouchableOpacity onPress={() => setShowEngine(!showEngine)} style={s.engineHead} testID="toggle-engine">
+              <Ionicons name="calculator" size={16} color={colors.primary} />
+              <Text style={s.engineT}>UNIVERSAL ROOF ENGINE</Text>
+              <View style={s.proBadge}>
+                <Text style={s.proBadgeT}>PRO</Text>
+              </View>
+              <Ionicons name={showEngine ? "chevron-up" : "chevron-down"} size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <Text style={s.engineSub}>
+              3 Eingaben → Sparrenlänge · Dachfläche · Gerüst-m² · €-Range
+            </Text>
+
+            {showEngine && (
+              <View style={{ marginTop: 12, gap: 10 }}>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <NumField label="Neigung α (°)" v={eng.alpha} set={(v: string) => setEng(s => ({ ...s, alpha: v }))} />
+                  <NumField label="Trauf-Breite W (m)" v={eng.w} set={(v: string) => setEng(s => ({ ...s, w: v }))} />
+                </View>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <NumField label="Traufhöhe h_T (m)" v={eng.h_t} set={(v: string) => setEng(s => ({ ...s, h_t: v }))} />
+                  <NumField label="Firsthöhe h_F (m)" v={eng.h_f} set={(v: string) => setEng(s => ({ ...s, h_f: v }))} />
+                </View>
+
+                <TouchableOpacity onPress={computeEngine} disabled={engBusy} style={s.engineBtn} testID="engine-compute">
+                  {engBusy ? <ActivityIndicator color="#000" />
+                    : <>
+                        <Ionicons name="flash" size={16} color="#000" />
+                        <Text style={s.engineBtnT}>Berechnen + Übernehmen</Text>
+                      </>
+                  }
+                </TouchableOpacity>
+
+                {engResult && (
+                  <View style={s.engineResult}>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Dachtyp</Text>
+                      <Text style={s.engineVal}>{engResult.geometry.suggested_type.toUpperCase()}</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Sparrenlänge L</Text>
+                      <Text style={s.engineVal}>{engResult.geometry.sparrenlaenge_m} m</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Tiefe (Grundriss)</Text>
+                      <Text style={s.engineVal}>{engResult.geometry.tiefe_horizontal_m} m</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Geneigte Fläche</Text>
+                      <Text style={s.engineVal}>{engResult.geometry.flaeche_geneigt_m2} m²</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Δh Dach</Text>
+                      <Text style={s.engineVal}>{engResult.geometry.hoehe_dach_m} m</Text>
+                    </View>
+
+                    {/* Gerüst-Block */}
+                    <View style={s.scaffoldHead}>
+                      <Ionicons name="construct" size={14} color={colors.accent} />
+                      <Text style={s.scaffoldT}>GERÜST-KALKULATION (DIN/ArbSchG)</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Gerüst-Höhe</Text>
+                      <Text style={s.engineVal}>{engResult.scaffolding.hoehe_geruest_m} m</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Gerüst-Länge</Text>
+                      <Text style={s.engineVal}>{engResult.scaffolding.laenge_geruest_m} m</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Fläche</Text>
+                      <Text style={[s.engineVal, { color: colors.accent }]}>{engResult.scaffolding.flaeche_m2} m²</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Kostenrahmen</Text>
+                      <Text style={[s.engineVal, { color: colors.accent }]}>
+                        €{engResult.scaffolding.estimate_eur_min} – €{engResult.scaffolding.estimate_eur_max}
+                      </Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Aufbau-Dauer</Text>
+                      <Text style={s.engineVal}>{engResult.scaffolding.aufbau_dauer_tage} Tage</Text>
+                    </View>
+                    <View style={s.engineResultRow}>
+                      <Text style={s.engineKey}>Lastklasse</Text>
+                      <Text style={s.engineValSm}>{engResult.scaffolding.lastklasse}</Text>
+                    </View>
+                    <Text style={s.engineNorm}>{engResult.scaffolding.norm}</Text>
+
+                    <TouchableOpacity onPress={pushEngineToHero} style={s.heroBtnEngine} testID="engine-push-hero">
+                      <Ionicons name="cloud-upload" size={16} color="#000" />
+                      <Text style={s.heroBtnT}>Gerüst-BOM an HERO pushen</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            )}
           </View>
 
           {/* Magic Workflow: Foto-Audit → Blueprint */}
@@ -656,4 +828,26 @@ const s = StyleSheet.create({
   guardNote: { color: colors.textSecondary, fontSize: 10, fontStyle: "italic", marginTop: 4 },
   guardOk: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.primaryGlow, borderWidth: 1, borderColor: colors.borderActive, marginTop: 10 },
   guardOkT: { color: colors.primary, fontSize: 11, fontWeight: "800", letterSpacing: 0.4 },
+
+  /* Universal Roof Engine */
+  engineBox: {
+    padding: spacing.md, borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderWidth: 2, borderColor: colors.primary,
+    marginBottom: spacing.sm,
+  },
+  engineHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  engineT: { color: colors.primary, fontSize: 12, fontWeight: "900", letterSpacing: 1.2, flex: 1 },
+  engineSub: { color: colors.textSecondary, fontSize: 11, marginTop: 4 },
+  engineBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, padding: 12, borderRadius: 10, backgroundColor: colors.primary },
+  engineBtnT: { color: "#000", fontSize: 13, fontWeight: "900", letterSpacing: 0.5 },
+  engineResult: { padding: 10, borderRadius: 10, backgroundColor: colors.bgDeep, borderWidth: 1, borderColor: colors.borderSoft, gap: 4 },
+  engineResultRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: colors.borderSoft },
+  engineKey: { color: colors.textSecondary, fontSize: 11, fontWeight: "600" },
+  engineVal: { color: colors.textPrimary, fontSize: 12, fontWeight: "900", fontFamily: Platform.OS === "ios" ? "Courier" : "monospace" },
+  engineValSm: { color: colors.textPrimary, fontSize: 10, fontWeight: "700" },
+  engineNorm: { color: colors.textSecondary, fontSize: 9, fontStyle: "italic", marginTop: 6, textAlign: "right" },
+  scaffoldHead: { flexDirection: "row", alignItems: "center", gap: 6, paddingTop: 10, marginTop: 4, borderTopWidth: 1, borderTopColor: colors.accent },
+  scaffoldT: { color: colors.accent, fontSize: 10, fontWeight: "900", letterSpacing: 1 },
+  heroBtnEngine: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, padding: 12, borderRadius: 10, backgroundColor: colors.accent, marginTop: 8 },
 });

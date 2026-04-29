@@ -15,6 +15,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, typography, spacing } from "../../src/theme";
 import { apiGet } from "../../src/api";
 import { useAuth } from "../../src/auth";
+import { RoofViewer3D } from "../../src/RoofViewer3D";
 
 export default function KundePortal() {
   const { user, logout } = useAuth();
@@ -101,6 +102,25 @@ export default function KundePortal() {
           </View>
         ) : (
           <>
+            {/* Mein digitales Dach (3D Twin) */}
+            {data?.blueprint_audit_id && (
+              <View style={s.section}>
+                <View style={s.sectionHead}>
+                  <Ionicons name="cube" size={18} color={colors.primary} />
+                  <Text style={s.sectionT}>Mein digitales Dach</Text>
+                  <View style={s.proBadgeMini}>
+                    <Text style={s.proBadgeMiniT}>3D-TWIN</Text>
+                  </View>
+                </View>
+                <Text style={s.helpT}>
+                  {Platform.OS === "web"
+                    ? "Drehen, zoomen, erkunden — exakt das Modell, das wir für die Planung verwenden."
+                    : "Top-Down-Ansicht Ihres digitalen Dach-Zwillings. Im Browser auch in 3D drehbar."}
+                </Text>
+                <RoofViewer3D auditId={data.blueprint_audit_id} height={300} />
+              </View>
+            )}
+
             {/* Preview Image */}
             {project.preview_image ? (
               <View style={s.previewWrap}>
@@ -267,4 +287,7 @@ const s = StyleSheet.create({
   supportD: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
   logoutBtn: { marginTop: 20, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border },
   logoutT: { color: colors.textPrimary, fontWeight: "700" },
+  helpT: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, marginBottom: 12 },
+  proBadgeMini: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: colors.primary, marginLeft: 4 },
+  proBadgeMiniT: { color: "#000", fontSize: 8, fontWeight: "900", letterSpacing: 0.6 },
 });

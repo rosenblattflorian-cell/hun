@@ -10,7 +10,7 @@ import uuid
 import bcrypt
 import jwt as pyjwt
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -27,6 +27,11 @@ from blueprint_service import (
     RoofBlueprintData, Obstacle, PvModule, from_roof_audit,
     generate_dxf, generate_pdf_blueprint, generate_obj, generate_png_topdown,
     DXF_LAYERS, validate_blueprint, has_blocking_errors, ValidationIssue,
+)
+from roof_engine import (
+    RoofGeometry, ScaffoldingCalc,
+    compute_roof_geometry, calculate_scaffolding,
+    rectify_obstacles, scaffolding_to_bom_item,
 )
 from hero_service import (
     hero_pull_project, map_hero_to_local, hero_push_document,
@@ -1086,7 +1091,22 @@ async def portal_my(user: dict = Depends(get_current_user)):
         await db.referrals.insert_one(ref)
         ref.pop("_id", None)
 
-    return {"customer": customer, "projects": out_projects, "referral": ref}
+    # Aktuelles Roof-Audit für 3D-Twin (Magic Workflow Customer-View)
+    audits_for_customer = await db.roof_audits.find(
+        {"customer_id": customer["id"]}, {"_id": 0}
+    ).sort("created_at", -1).to_list(5)
+    primary_audit = audits_for_customer[0] if audits_for_customer else None
+
+    return {
+        "customer": customer,
+        "projects": out_projects,
+        "referral": ref,
+        "blueprint_audit_id": primary_audit["id"] if primary_audit else None,
+        "audits": [{"id": a["id"], "title": a.get("title", "Aufmaß"),
+                    "laenge": a.get("laenge"), "breite": a.get("breite"),
+                    "first": a.get("first"), "walm": a.get("walm"),
+                    "neigung": a.get("neigung")} for a in audits_for_customer],
+    }
 
 
 class ReferralLeadCreate(BaseModel):
@@ -1908,6 +1928,148 @@ async def api_blueprint_push_hero(req: BlueprintRequest, user: dict = Depends(ge
     return log_entry
 
 # ====================== /BLUEPRINT ======================
+
+
+# ====================== UNIVERSAL ROOF ENGINE & SCAFFOLDING ======================
+# Trigonometrie + automatische Gerüst-Kalkulation (DIN/ArbSchG-konform).
+
+class RoofEngineRequest(BaseModel):
+    alpha_deg: float = Field(..., ge=0, le=89, description="Dachneigung in °")
+    h_traufe: float = Field(..., gt=0, description="Traufhöhe in m")
+    h_first: float = Field(..., gt=0, description="Firsthöhe in m")
+    breite_traufe: float = Field(..., gt=0, description="Trauflänge W in m")
+    walm_offset: float = 0.0
+    obstacles_pct: List[Dict] = Field(default_factory=list,
+        description="Erkannte Hindernisse als 0..1-Prozentwerte")
+
+
+@app.post("/api/roof-engine/compute")
+async def api_roof_engine_compute(req: RoofEngineRequest, user: dict = Depends(get_current_user)):
+    """
+    Berechnet aus α + h_T + h_F + W:
+      - Sparrenlänge L
+      - Tiefe (Grundriss)
+      - Dachfläche (geneigt + Grundriss)
+      - Vorgeschlagener Dachtyp
+      - Rektifizierte Hindernisse (0..1 → m)
+      - Gerüst-Kalkulation
+    """
+    try:
+        geo = compute_roof_geometry(
+            req.alpha_deg, req.h_traufe, req.h_first,
+            req.breite_traufe, req.walm_offset,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    rectified = rectify_obstacles(geo, req.obstacles_pct)
+
+    try:
+        scaff = calculate_scaffolding(req.h_traufe, req.breite_traufe)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    bom_item = scaffolding_to_bom_item(scaff)
+
+    return {
+        "geometry": {
+            "alpha_deg": geo.alpha_deg,
+            "h_traufe": geo.h_traufe, "h_first": geo.h_first,
+            "breite_traufe": geo.breite_traufe,
+            "sparrenlaenge_m": geo.sparrenlaenge,
+            "tiefe_horizontal_m": geo.tiefe_horizontal,
+            "hoehe_dach_m": geo.hoehe_dach,
+            "flaeche_geneigt_m2": geo.flaeche_geneigt,
+            "flaeche_grundriss_m2": geo.flaeche_grundriss,
+            "suggested_type": geo.suggested_type,
+        },
+        "rectified_obstacles": rectified,
+        "scaffolding": {
+            "hoehe_geruest_m": scaff.hoehe_geruest_m,
+            "laenge_geruest_m": scaff.laenge_geruest_m,
+            "flaeche_m2": scaff.flaeche_m2,
+            "lastklasse": scaff.lastklasse,
+            "norm": scaff.norm,
+            "sicherheitsueberstand_m": scaff.sicherheitsueberstand_m,
+            "seitlicher_ueberstand_m": scaff.seitlicher_ueberstand_m,
+            "estimate_eur_min": scaff.estimate_eur_min,
+            "estimate_eur_max": scaff.estimate_eur_max,
+            "aufbau_dauer_tage": scaff.aufbau_dauer_tage,
+        },
+        "hero_bom_item": bom_item,
+    }
+
+
+@app.post("/api/roof-engine/scaffolding")
+async def api_scaffolding_only(
+    h_traufe: float, breite_traufe: float,
+    user: dict = Depends(get_current_user),
+):
+    """Nur Gerüst-Kalkulation, ohne Roof-Engine."""
+    try:
+        scaff = calculate_scaffolding(h_traufe, breite_traufe)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "hoehe_geruest_m": scaff.hoehe_geruest_m,
+        "laenge_geruest_m": scaff.laenge_geruest_m,
+        "flaeche_m2": scaff.flaeche_m2,
+        "estimate_eur_min": scaff.estimate_eur_min,
+        "estimate_eur_max": scaff.estimate_eur_max,
+        "lastklasse": scaff.lastklasse,
+        "norm": scaff.norm,
+        "hero_bom_item": scaffolding_to_bom_item(scaff),
+    }
+
+
+@app.post("/api/roof-engine/push-hero")
+async def api_roof_engine_push_hero(
+    req: RoofEngineRequest,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Pusht Roof-Geometrie + Gerüst-BOM-Item an HERO-Akte.
+    Im MOCK-Mode: Logged in db.hero_sync_log mit doc_type='roof_engine'.
+    """
+    try:
+        geo = compute_roof_geometry(
+            req.alpha_deg, req.h_traufe, req.h_first,
+            req.breite_traufe, req.walm_offset,
+        )
+        scaff = calculate_scaffolding(req.h_traufe, req.breite_traufe)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    bom_item = scaffolding_to_bom_item(scaff)
+
+    # Bilde JSON-Payload für HERO-Position
+    payload = {
+        "geometry": geo.__dict__,
+        "scaffolding_bom": bom_item,
+        "norm_compliant": True,
+    }
+
+    log_entry = {
+        "id": str(uuid.uuid4()),
+        "type": "roof_engine_push",
+        "geometry_summary": {
+            "type": geo.suggested_type,
+            "L": geo.sparrenlaenge, "W": geo.breite_traufe,
+            "α": geo.alpha_deg, "Fläche": geo.flaeche_geneigt,
+        },
+        "scaffolding_summary": {
+            "h": scaff.hoehe_geruest_m, "l": scaff.laenge_geruest_m,
+            "m2": scaff.flaeche_m2, "eur_range": f"{scaff.estimate_eur_min}–{scaff.estimate_eur_max}",
+        },
+        "is_mock": HERO_IS_MOCK,
+        "payload_size": len(str(payload)),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.hero_sync_log.insert_one(log_entry)
+    log_entry.pop("_id", None)
+    return log_entry
+
+# ====================== /UNIVERSAL ROOF ENGINE ======================
 
 app.add_middleware(
     CORSMiddleware,
