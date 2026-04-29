@@ -43,3 +43,22 @@ export async function apiDelete(path: string): Promise<any> {
   if (!r.ok) throw new Error((await r.json()).detail || "Fehler");
   return r.json();
 }
+
+/** Download a binary response as Blob (for PDF/DXF/PNG). */
+export async function apiDownloadBlob(path: string, body: any, fallbackName: string): Promise<{ blob: Blob; filename: string; size: number }> {
+  const r = await fetch(`${BASE}/api${path}`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(typeof data.detail === "string" ? data.detail : "Fehler beim Generieren");
+  }
+  const blob = await r.blob();
+  const cd = r.headers.get("content-disposition") || "";
+  const m = cd.match(/filename="?([^"]+)"?/);
+  return { blob, filename: m?.[1] || fallbackName, size: blob.size };
+}
+
+export const API_BASE = BASE;

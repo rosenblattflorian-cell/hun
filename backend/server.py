@@ -23,6 +23,11 @@ from photo_audit import measure_roof, detect_obstacles
 from planning_engine import plan_full
 from quotes import structure_quote_with_ai, generate_quote_pdf
 from installer import bom_to_checklist_items, generate_protocol_pdf, PHASE_LABEL
+from blueprint_service import (
+    RoofBlueprintData, Obstacle, PvModule, from_roof_audit,
+    generate_dxf, generate_pdf_blueprint, generate_obj, generate_png_topdown,
+    DXF_LAYERS,
+)
 from hero_service import (
     hero_pull_project, map_hero_to_local, hero_push_document,
     hero_push_bom_note, hero_health, IS_MOCK as HERO_IS_MOCK,
@@ -1580,6 +1585,202 @@ async def startup():
         logger.info("Seeded demo customers")
 
 app.include_router(api)
+
+# ====================== BLUEPRINT (Scan-to-Blueprint) ======================
+# Generiert maßstabsgetreue PDF/DXF/OBJ/PNG Pläne aus Roof-Audit-Daten.
+# DXF mit K2-Base-konformer Layer-Struktur (KEEPOUT_OBSTACLES für Sperrflächen).
+
+class ObstacleRequest(BaseModel):
+    type: str = "obstacle"
+    x: float                       # 0..1 relativ zur Dachfläche ODER absolut (m)
+    y: float
+    w: float
+    h: float
+    label: Optional[str] = None
+    relative: bool = True          # True => Werte sind 0..1 Prozent
+
+class ModuleRequest(BaseModel):
+    x: float
+    y: float
+    w_m: float = 1.722
+    h_m: float = 1.134
+
+class BlueprintRequest(BaseModel):
+    audit_id: Optional[str] = None
+    # ODER inline-data:
+    laenge: Optional[float] = None
+    breite: Optional[float] = None
+    first: Optional[float] = None
+    walm: float = 0.0
+    neigung: float = 35.0
+    ausrichtung: str = "Süd"
+    title: str = "Dachaufmaß"
+    customer_id: Optional[str] = None
+    obstacles: List[ObstacleRequest] = Field(default_factory=list)
+    modules: List[ModuleRequest] = Field(default_factory=list)
+
+
+async def _resolve_blueprint_data(req: BlueprintRequest) -> RoofBlueprintData:
+    audit_dict = None
+    customer_dict = None
+    if req.audit_id:
+        audit_dict = await db.roof_audits.find_one({"id": req.audit_id}, {"_id": 0})
+        if not audit_dict:
+            raise HTTPException(404, "Audit not found")
+        if audit_dict.get("customer_id"):
+            customer_dict = await db.customers.find_one(
+                {"id": audit_dict["customer_id"]}, {"_id": 0}
+            )
+    elif req.laenge and req.breite and req.first:
+        audit_dict = {
+            "title": req.title, "laenge": req.laenge, "breite": req.breite,
+            "first": req.first, "walm": req.walm, "neigung": req.neigung,
+            "ausrichtung": req.ausrichtung,
+        }
+        if req.customer_id:
+            customer_dict = await db.customers.find_one(
+                {"id": req.customer_id}, {"_id": 0}
+            )
+    else:
+        raise HTTPException(400, "Either audit_id or (laenge, breite, first) required")
+
+    L = float(audit_dict.get("laenge", 10))
+    B = float(audit_dict.get("breite", 8))
+
+    obstacles_pct = []
+    for obs in req.obstacles:
+        if obs.relative:
+            obstacles_pct.append({
+                "type": obs.type, "x": obs.x, "y": obs.y,
+                "w": obs.w, "h": obs.h, "label": obs.label,
+            })
+        else:
+            obstacles_pct.append({
+                "type": obs.type, "x": obs.x / L, "y": obs.y / B,
+                "w": obs.w / L, "h": obs.h / B, "label": obs.label,
+            })
+
+    return from_roof_audit(audit_dict, customer_dict, obstacles_pct,
+                            modules_pct=[m.model_dump() for m in req.modules])
+
+
+@app.post("/api/blueprint/dxf")
+async def api_blueprint_dxf(req: BlueprintRequest, user: dict = Depends(get_current_user)):
+    data = await _resolve_blueprint_data(req)
+    try:
+        dxf_bytes = generate_dxf(data)
+    except Exception as e:
+        logger.exception("DXF generation failed")
+        raise HTTPException(500, f"DXF Fehler: {e}")
+    fname = f"Blueprint_{data.project_title.replace(' ', '_')}.dxf"
+    return Response(
+        content=dxf_bytes,
+        media_type="application/dxf",
+        headers={"Content-Disposition": f"attachment; filename=\"{fname}\""},
+    )
+
+
+@app.post("/api/blueprint/pdf")
+async def api_blueprint_pdf(req: BlueprintRequest, user: dict = Depends(get_current_user)):
+    data = await _resolve_blueprint_data(req)
+    try:
+        pdf_bytes = generate_pdf_blueprint(data)
+    except Exception as e:
+        logger.exception("PDF Blueprint failed")
+        raise HTTPException(500, f"PDF Fehler: {e}")
+    fname = f"Blueprint_{data.project_title.replace(' ', '_')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename=\"{fname}\""},
+    )
+
+
+@app.post("/api/blueprint/obj")
+async def api_blueprint_obj(req: BlueprintRequest, user: dict = Depends(get_current_user)):
+    data = await _resolve_blueprint_data(req)
+    try:
+        obj_bytes, mtl_bytes = generate_obj(data)
+    except Exception as e:
+        logger.exception("OBJ generation failed")
+        raise HTTPException(500, f"OBJ Fehler: {e}")
+    return {
+        "obj": obj_bytes.decode("utf-8"),
+        "mtl": mtl_bytes.decode("utf-8"),
+        "filename_obj": f"{data.project_title.replace(' ', '_')}.obj",
+        "filename_mtl": f"{data.project_title.replace(' ', '_')}.mtl",
+    }
+
+
+@app.post("/api/blueprint/png")
+async def api_blueprint_png(req: BlueprintRequest, user: dict = Depends(get_current_user)):
+    data = await _resolve_blueprint_data(req)
+    try:
+        png_bytes = generate_png_topdown(data)
+    except Exception as e:
+        logger.exception("PNG generation failed")
+        raise HTTPException(500, f"PNG Fehler: {e}")
+    fname = f"Blueprint_{data.project_title.replace(' ', '_')}.png"
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f"inline; filename=\"{fname}\""},
+    )
+
+
+@app.get("/api/blueprint/dxf-layers")
+async def api_blueprint_layers(user: dict = Depends(get_current_user)):
+    """Gibt die K2-Base-konforme DXF-Layer-Struktur zurück (für UI-Doku)."""
+    return {
+        "layers": [
+            {"name": k, "color": v["color"], "lineweight": v["lineweight"]}
+            for k, v in DXF_LAYERS.items()
+        ],
+        "k2_compatible": True,
+        "units": "meters",
+        "dxf_version": "R2018",
+    }
+
+
+@app.post("/api/blueprint/push-hero")
+async def api_blueprint_push_hero(req: BlueprintRequest, user: dict = Depends(get_current_user)):
+    """Generiert PDF + DXF und pusht beides an die HERO-Akte (mock-fähig)."""
+    data = await _resolve_blueprint_data(req)
+    try:
+        pdf_bytes = generate_pdf_blueprint(data)
+        dxf_bytes = generate_dxf(data)
+    except Exception as e:
+        raise HTTPException(500, f"Blueprint-Generierung fehlgeschlagen: {e}")
+
+    hero_project_id = "HRO-MOCK-PROJECT"  # In MVP: aus Project-Metadaten ableiten
+    pdf_resp = await hero_push_document(
+        hero_project_id=hero_project_id,
+        filename=f"Blueprint_{data.project_title.replace(' ', '_')}.pdf",
+        content=pdf_bytes, mime="application/pdf",
+    )
+    dxf_resp = await hero_push_document(
+        hero_project_id=hero_project_id,
+        filename=f"Blueprint_{data.project_title.replace(' ', '_')}.dxf",
+        content=dxf_bytes, mime="application/dxf",
+    )
+
+    log_entry = {
+        "id": str(uuid.uuid4()),
+        "type": "blueprint_push",
+        "project": data.project_title,
+        "files": ["PDF", "DXF"],
+        "pdf_size": len(pdf_bytes),
+        "dxf_size": len(dxf_bytes),
+        "result_pdf": pdf_resp,
+        "result_dxf": dxf_resp,
+        "is_mock": HERO_IS_MOCK,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.hero_sync_log.insert_one(log_entry)
+    log_entry.pop("_id", None)
+    return log_entry
+
+# ====================== /BLUEPRINT ======================
 
 app.add_middleware(
     CORSMiddleware,
