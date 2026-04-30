@@ -360,44 +360,67 @@ export default function BlueprintScreen() {
 
           {/* Module-Selector — Sync mit Admin-DB */}
           {activeModules.length > 0 && (
-            <View style={s.modSelectorBox}>
+            <View style={s.modSelectorBox} testID="module-selector-box">
               <View style={s.modSelectorHead}>
                 <Ionicons name="cube" size={14} color={colors.primary} />
                 <Text style={s.modSelectorT}>AKTIVE MODUL-DB · {activeModules.length} Modelle</Text>
+                <View style={{ flex: 1 }} />
+                <View style={s.swipeHint} testID="module-swipe-hint">
+                  <Ionicons name="chevron-back" size={10} color={colors.accent} />
+                  <Text style={s.swipeHintT}>WISCHEN</Text>
+                  <Ionicons name="chevron-forward" size={10} color={colors.accent} />
+                </View>
               </View>
               <Text style={s.modSelectorSub}>
                 Synchronisiert mit Admin-Stammdaten — Maße werden automatisch in PV-Layout übernommen
+                {selectedModuleId && ` · Ausgewählt: ${activeModules.find(x => x.id === selectedModuleId)?.name || "—"}`}
               </Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}
-                          contentContainerStyle={{ gap: 6 }}>
-                {activeModules.map(m => (
-                  <TouchableOpacity key={m.id}
-                    onPress={() => setSelectedModuleId(selectedModuleId === m.id ? null : m.id)}
-                    style={[s.modChip, selectedModuleId === m.id && s.modChipActive]}
-                    testID={`module-chip-${m.id}`}
-                  >
-                    <Text style={[s.modChipBrand, selectedModuleId === m.id && { color: "#000" }]}>
-                      {m.brand}
-                    </Text>
-                    <Text style={[s.modChipName, selectedModuleId === m.id && { color: "#000" }]} numberOfLines={1}>
-                      {m.name}
-                    </Text>
-                    <View style={{ flexDirection: "row", gap: 4 }}>
-                      <Text style={[s.modChipSpec, { color: selectedModuleId === m.id ? "#000" : colors.primary }]}>
-                        {m.leistung_wp}Wp
+              <View style={s.modScrollWrap}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={s.modScrollView}
+                  contentContainerStyle={s.modScrollContent}
+                  nestedScrollEnabled
+                  testID="module-scroll"
+                >
+                  {activeModules.map(m => (
+                    <TouchableOpacity key={m.id}
+                      onPress={() => setSelectedModuleId(selectedModuleId === m.id ? null : m.id)}
+                      style={[s.modChip, selectedModuleId === m.id && s.modChipActive]}
+                      testID={`module-chip-${m.id}`}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[s.modChipBrand, selectedModuleId === m.id && { color: "#000" }]}>
+                        {m.brand}
                       </Text>
-                      <Text style={[s.modChipSpec, selectedModuleId === m.id && { color: "#000" }]}>
-                        · {m.laenge_mm}×{m.breite_mm}mm
+                      <Text style={[s.modChipName, selectedModuleId === m.id && { color: "#000" }]} numberOfLines={1}>
+                        {m.name}
                       </Text>
-                      {m.glas_glas && (
-                        <Text style={[s.modChipSpec, { color: selectedModuleId === m.id ? "#000" : colors.accent }]}>
-                          GG
+                      <View style={{ flexDirection: "row", gap: 4, flexWrap: "wrap" }}>
+                        <Text style={[s.modChipSpec, { color: selectedModuleId === m.id ? "#000" : colors.primary }]}>
+                          {m.leistung_wp}Wp
                         </Text>
+                        <Text style={[s.modChipSpec, selectedModuleId === m.id && { color: "#000" }]}>
+                          · {m.laenge_mm}×{m.breite_mm}mm
+                        </Text>
+                        {m.glas_glas && (
+                          <Text style={[s.modChipSpec, { color: selectedModuleId === m.id ? "#000" : colors.accent }]}>
+                            GG
+                          </Text>
+                        )}
+                      </View>
+                      {selectedModuleId === m.id && (
+                        <View style={s.modChipCheck}>
+                          <Ionicons name="checkmark-circle" size={14} color="#000" />
+                        </View>
                       )}
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                {/* Right-edge fade to signal more content horizontally */}
+                <View pointerEvents="none" style={s.modFadeRight} />
+              </View>
             </View>
           )}
 
@@ -917,17 +940,54 @@ const s = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1, borderColor: colors.border,
     marginBottom: spacing.sm,
+    // Z-index / elevation fix damit die Sektion nicht von nachfolgenden Cards verdeckt wird
+    zIndex: 10,
+    ...(Platform.OS === "android" ? { elevation: 3 } : {}),
+    overflow: "visible",
   },
   modSelectorHead: { flexDirection: "row", alignItems: "center", gap: 6 },
   modSelectorT: { color: colors.primary, fontSize: 11, fontWeight: "900", letterSpacing: 1.2 },
   modSelectorSub: { color: colors.textSecondary, fontSize: 11, marginTop: 4 },
+  swipeHint: {
+    flexDirection: "row", alignItems: "center", gap: 3,
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,214,0,0.12)",
+    borderWidth: 1, borderColor: "rgba(255,214,0,0.3)",
+  },
+  swipeHintT: { color: colors.accent, fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
+  modScrollWrap: { marginTop: 8, position: "relative" },
+  modScrollView: { },
+  modScrollContent: {
+    gap: 6,
+    paddingVertical: 4,
+    paddingRight: 28,   // Platz damit letzte Card nicht geclippt wird
+  },
   modChip: {
-    minWidth: 160, padding: 10, borderRadius: 10,
+    minWidth: 170, padding: 10, borderRadius: 10,
     borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bg,
     gap: 2,
+    position: "relative",
   },
   modChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   modChipBrand: { color: colors.textSecondary, fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
   modChipName: { color: colors.textPrimary, fontSize: 12, fontWeight: "800" },
   modChipSpec: { fontSize: 10, fontWeight: "700" },
+  modChipCheck: {
+    position: "absolute", top: 6, right: 6,
+  },
+  modFadeRight: {
+    position: "absolute",
+    right: 0, top: 0, bottom: 0,
+    width: 24,
+    // Subtiler Gradient-Effekt über einen abgerundeten Rand – Web/native-safe
+    backgroundColor: colors.surface,
+    opacity: 0.75,
+    ...(Platform.OS === "web" ? {
+      // @ts-ignore web-only background gradient hint
+      backgroundImage: `linear-gradient(to right, rgba(0,0,0,0), ${colors.surface})`,
+      backgroundColor: "transparent",
+      opacity: 1,
+    } : {}),
+  },
 });

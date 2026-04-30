@@ -77,7 +77,7 @@ frontend:
 
   - task: "Blueprint Screen — 4-Format Export + Roof Engine + Module-Selector"
     implemented: true
-    working: true
+    working: "NA"
     file: "frontend/app/blueprint.tsx"
     needs_retesting: true
     status_history:
@@ -92,6 +92,19 @@ frontend:
             - 4 Format-Karten (PDF rot, DXF grün, OBJ blau, PNG gelb)
             - HERO-Push Button (Apple Green)
             - K2-Layer-Doku am Ende
+        - working: "NA"
+          agent: "main"
+          comment: |
+            FIX Sprint (heute): Module-Selector UX-Visibility-Fix.
+            Problem: Auf Mobile (390px) waren von 6 Modulen nur 2 sichtbar, ohne Hinweis auf horizontalen Scroll.
+            Lösung:
+              1. "WISCHEN ← →" Badge (gelb) im Section-Header eingebaut → signalisiert klar, dass horizontal gescrollt werden kann.
+              2. Rechts-Fade-Gradient am ScrollView-Rand (Web: linear-gradient; Native: semi-transparente Kante).
+              3. z-index: 10 + elevation: 3 (Android) + overflow: visible am modSelectorBox → Sektion kann nicht mehr von nachfolgenden Cards verdeckt werden.
+              4. paddingRight: 28 im Scroll-Content → letzte Card nicht mehr geclippt.
+              5. Active-Chip zeigt jetzt ein ✓-Checkmark-Icon + Subtext mit ausgewähltem Modul.
+              6. TestIDs hinzugefügt: module-selector-box, module-swipe-hint, module-scroll, module-chip-{id}.
+            Screenshots bestätigen: WISCHEN-Hint sichtbar, Scroll funktioniert, Ausgewähltes Modul wird hervorgehoben.
 
   - task: "Photo-Audit Easy-Mode: Auto-Snap + 3-Werte-Wizard + Onboarding"
     implemented: true
