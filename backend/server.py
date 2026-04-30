@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, EmailStr
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from seed_inventory import build_seed_data, build_compatibilities
 from seed_inventory_v2 import get_extension_data, build_extension_compatibilities
-from photo_audit import measure_roof, detect_obstacles
+from photo_audit import measure_roof, detect_obstacles, auto_detect_roof_corners
 from planning_engine import plan_full
 from quotes import structure_quote_with_ai, generate_quote_pdf
 from installer import bom_to_checklist_items, generate_protocol_pdf, PHASE_LABEL
@@ -831,8 +831,11 @@ async def protocol_pdf(project_id: str, request: Request, _t: Optional[str] = No
         bom=(cl or {}).get("bom_snapshot"),
         signatures=sigs,
     )
+    # Sanitize filename: ASCII-only (HTTP headers must be latin-1)
+    safe_title = (project.get("title", "Projekt") or "Projekt")
+    safe_title = safe_title.encode("ascii", "ignore").decode("ascii").replace(" ", "_") or "Projekt"
     return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="Abnahmeprotokoll_{project.get("title","Projekt")}.pdf"'})
+                    headers={"Content-Disposition": f'inline; filename="Abnahmeprotokoll_{safe_title}.pdf"'})
 
 # Monteur Project Dashboard — listet alle Projekte mit Checklisten-Fortschritt
 @api.get("/monteur/projects")
@@ -2238,6 +2241,35 @@ async def api_admin_seed_modules(user: dict = Depends(get_current_user)):
     return {"seeded": inserted, "total": len(seed_modules)}
 
 # ====================== /ADMIN MODUL-STAMMDATEN ======================
+
+
+# ====================== AUTO-SNAP (Easy-Mode KI) ======================
+
+class AutoSnapRequest(BaseModel):
+    image_b64: str = Field(..., description="data:image/jpeg;base64,... oder reines Base64")
+
+
+@app.post("/api/photo-audit/auto-snap")
+async def api_auto_snap(req: AutoSnapRequest, user: dict = Depends(get_current_user)):
+    """
+    KI-Auto-Snap: erkennt automatisch die 4 Eckpunkte einer Dachfläche im Foto.
+    Nutzt OpenCV Canny + Contours für die größte rechteckige Polygon-Form.
+    Fallback: Heuristische zentrale Box bei niedriger Confidence.
+
+    Response:
+      {
+        corners: [{x:0..1, y:0..1}, ×4]   (TL, TR, BR, BL),
+        confidence: 0..1,
+        method: "contour" | "heuristic",
+        image_w_px, image_h_px
+      }
+    """
+    try:
+        result = auto_detect_roof_corners(req.image_b64)
+        return result
+    except Exception as e:
+        logger.exception("Auto-snap failed")
+        raise HTTPException(500, f"Auto-Snap-Fehler: {e}")
 
 app.add_middleware(
     CORSMiddleware,

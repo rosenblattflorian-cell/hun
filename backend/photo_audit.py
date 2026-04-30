@@ -38,6 +38,124 @@ def encode_image_jpeg(img: np.ndarray, quality: int = 75) -> str:
 
 def order_quad(pts: np.ndarray) -> np.ndarray:
     """4 Punkte in TL, TR, BR, BL Reihenfolge sortieren."""
+    rect = np.zeros((4, 2), dtype=np.float32)
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]   # TL
+    rect[2] = pts[np.argmax(s)]   # BR
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # TR
+    rect[3] = pts[np.argmax(diff)]  # BL
+    return rect
+
+
+# ===================== AUTO-SNAP (Easy-Mode) =====================
+# Findet automatisch das größte rechteckige Polygon (Dachfläche) im Bild.
+
+def auto_detect_roof_corners(image_b64: str) -> Dict[str, Any]:
+    """
+    KI-Auto-Snap: Erkennt automatisch die 4 Eckpunkte einer Dachfläche.
+
+    Pipeline:
+      1. Decode + Resize (max 1200px)
+      2. Grayscale + GaussianBlur + Canny Edge Detection
+      3. Dilatation für Lücken in Kanten
+      4. findContours + größtes Polygon mit ≥4 Ecken
+      5. approxPolyDP zum 4-Eck-Approximations
+      6. Fallback: Heuristik (zentrale Box, größte konvexe Hülle)
+
+    Returns:
+      {
+        "corners": [{x:0..1, y:0..1}, ...],   # 4 Eckpunkte (TL, TR, BR, BL) als 0..1 normalisiert
+        "confidence": 0..1,                   # 0=Heuristik-Fallback, 1=klare Kanten
+        "image_w_px": int, "image_h_px": int,
+        "method": "contour" | "heuristic",
+      }
+    """
+    img = decode_image(image_b64)
+    h, w = img.shape[:2]
+
+    # Resize falls zu groß
+    max_side = 1200
+    scale = 1.0
+    if max(h, w) > max_side:
+        scale = max_side / max(h, w)
+        img_small = cv2.resize(img, None, fx=scale, fy=scale)
+    else:
+        img_small = img.copy()
+    h_s, w_s = img_small.shape[:2]
+
+    gray = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Adaptive Canny (Otsu Threshold-basiert)
+    median = float(np.median(blurred))
+    lower = max(20, int(0.66 * median))
+    upper = min(255, int(1.33 * median))
+    edges = cv2.Canny(blurred, lower, upper, apertureSize=3)
+
+    # Dilatation um Lücken zu schließen
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    dilated = cv2.dilate(edges, kernel, iterations=2)
+
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return _heuristic_corners(w, h)
+
+    # Sortiere nach Fläche, nimm die größten 5
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    best_quad = None
+    best_score = 0.0
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < (h_s * w_s) * 0.05:  # mindestens 5% des Bildes
+            continue
+        peri = cv2.arcLength(c, True)
+        # Approx zu Polygon
+        for eps_factor in (0.02, 0.03, 0.04, 0.05):
+            approx = cv2.approxPolyDP(c, eps_factor * peri, True)
+            if len(approx) == 4:
+                # Score: Konvexität × Flächenanteil
+                if cv2.isContourConvex(approx):
+                    score = (area / (h_s * w_s))
+                    if score > best_score:
+                        best_score = score
+                        best_quad = approx.reshape(4, 2).astype(np.float32) / scale
+                break
+
+    if best_quad is None:
+        return _heuristic_corners(w, h)
+
+    ordered = order_quad(best_quad)
+    confidence = min(0.5 + best_score, 0.95)
+    return {
+        "corners": [{"x": float(p[0]) / w, "y": float(p[1]) / h} for p in ordered],
+        "confidence": round(confidence, 2),
+        "image_w_px": w, "image_h_px": h,
+        "method": "contour",
+    }
+
+
+def _heuristic_corners(w: int, h: int) -> Dict[str, Any]:
+    """Fallback: setzt eine zentrale Box (60% der Bildfläche)."""
+    margin_x = w * 0.20
+    margin_y = h * 0.25
+    pts = [
+        (margin_x, margin_y),                # TL
+        (w - margin_x, margin_y),            # TR
+        (w - margin_x, h - margin_y),        # BR
+        (margin_x, h - margin_y),            # BL
+    ]
+    return {
+        "corners": [{"x": p[0] / w, "y": p[1] / h} for p in pts],
+        "confidence": 0.3,
+        "image_w_px": w, "image_h_px": h,
+        "method": "heuristic",
+    }
+
+
+# ================== /AUTO-SNAP ==================
+
     pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
     if len(pts) != 4:
         raise ValueError("Genau 4 Punkte erforderlich")

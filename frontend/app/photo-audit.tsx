@@ -107,6 +107,35 @@ export default function PhotoAudit() {
     finally { setLoading(false); }
   };
 
+  /** KI-Auto-Snap: erkennt automatisch die 4 Eckpunkte des Daches */
+  const autoSnapCorners = async () => {
+    if (!image) return;
+    setLoading(true);
+    try {
+      const r = await apiPost<any>("/photo-audit/auto-snap", {
+        image_b64: image.base64.startsWith("data:") ? image.base64 : `data:image/jpeg;base64,${image.base64}`,
+      });
+      // Konvertiere 0..1 Corners → Bild-Pixel
+      const newPoints = (r.corners || []).map((c: any) => ({
+        x: c.x * image.w, y: c.y * image.h,
+      }));
+      if (newPoints.length === 4) {
+        setPoints(newPoints);
+        const cnf = Math.round((r.confidence || 0) * 100);
+        const method = r.method === "contour" ? "KI-Erkennung" : "Heuristik";
+        Alert.alert(
+          `Auto-Snap (${cnf}% sicher)`,
+          `${method}: 4 Eckpunkte gesetzt.\n\n${r.method === "contour"
+            ? "Du kannst Punkte einzeln nachschieben."
+            : "Heuristik aktiv — bitte verifizieren."}`,
+        );
+      } else {
+        Alert.alert("Auto-Snap fehlgeschlagen", "Bitte manuell markieren.");
+      }
+    } catch (e: any) { Alert.alert("Auto-Snap-Fehler", e.message); }
+    finally { setLoading(false); }
+  };
+
   const acceptSuggestion = (s: any) => {
     setObstacles([...obstacles, s.polygon.map(([x, y]: number[]) => ({ x, y }))]);
     setObstacleSuggestions(obstacleSuggestions.filter(x => x !== s));
@@ -214,6 +243,26 @@ export default function PhotoAudit() {
                 <SmallBtn icon="trash-outline" label="Letzter Punkt" onPress={() => obstacleMode ? setCurrentObstacle(currentObstacle.slice(0, -1)) : setPoints(points.slice(0, -1))} />
                 <SmallBtn icon="image" label="Neues Foto" onPress={pickImage} />
               </View>
+
+              {/* KI-Auto-Snap Hero-Button */}
+              <TouchableOpacity
+                onPress={autoSnapCorners}
+                disabled={loading}
+                style={[s.snapBtn, loading && { opacity: 0.5 }]}
+                testID="auto-snap-btn"
+                activeOpacity={0.85}
+              >
+                <View style={s.snapIcon}>
+                  {loading
+                    ? <ActivityIndicator color="#000" />
+                    : <Ionicons name="flash" size={20} color="#000" />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.snapT}>KI-AUTO-SNAP</Text>
+                  <Text style={s.snapS}>Eckpunkte automatisch erkennen</Text>
+                </View>
+                <Ionicons name="sparkles" size={18} color="#000" />
+              </TouchableOpacity>
 
               {/* Referenz */}
               <Text style={s.label}>REFERENZMAß</Text>
@@ -333,6 +382,24 @@ const s = StyleSheet.create({
   label: { color: colors.textSecondary, fontSize: 11, fontWeight: "800", letterSpacing: 1.5, marginTop: 18, marginBottom: 8 },
   canvas: { borderRadius: 12, overflow: "hidden", backgroundColor: "#000", borderWidth: 1, borderColor: colors.border, alignSelf: "center" },
   smallBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border },
+
+  /* Easy-Mode Auto-Snap Hero-Button */
+  snapBtn: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    padding: 14, borderRadius: 14, marginTop: 12,
+    backgroundColor: colors.primary,
+    borderWidth: 2, borderColor: colors.primary,
+    ...Platform.select({
+      ios: { shadowColor: colors.primary, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 12 },
+      android: { elevation: 6 },
+    }),
+  },
+  snapIcon: {
+    width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.18)",
+  },
+  snapT: { color: "#000", fontSize: 14, fontWeight: "900", letterSpacing: 1 },
+  snapS: { color: "rgba(0,0,0,0.7)", fontSize: 11, marginTop: 1 },
   smallBtnT: { color: colors.textPrimary, fontSize: 12, fontWeight: "700" },
   refRow: { flexDirection: "row", alignItems: "center", gap: 5, flexWrap: "wrap" },
   refTxt: { color: colors.textSecondary, fontSize: 12, fontWeight: "700", marginRight: 4 },
