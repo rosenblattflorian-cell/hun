@@ -1,20 +1,22 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Image,
-  GestureResponderEvent, Dimensions,
+  GestureResponderEvent, Dimensions, Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import Svg, { Polygon, Circle, Line, Rect, Text as SvgText, G } from "react-native-svg";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, typography, spacing } from "../src/theme";
 import { apiPost } from "../src/api";
 
 type Pt = { x: number; y: number };
 
 const COLORS = ["#00C853", "#3B82F6", "#F59E0B", "#A855F7"]; // 4 corners
+const ONBOARD_KEY = "photo_audit_onboarded_v1";
 
 export default function PhotoAudit() {
   const router = useRouter();
@@ -30,6 +32,27 @@ export default function PhotoAudit() {
   const [loading, setLoading] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
+  // 3-Werte-Wizard (Easy-Mode)
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizard, setWizard] = useState({ alpha: "35", h_t: "4.5", h_f: "7.5" });
+  const [engineResult, setEngineResult] = useState<any>(null);
+
+  // Onboarding
+  const [onboardStep, setOnboardStep] = useState<number>(-1);
+  useEffect(() => {
+    AsyncStorage.getItem(ONBOARD_KEY).then(v => {
+      if (!v) setOnboardStep(0);
+    });
+  }, []);
+  const nextOnboard = async () => {
+    if (onboardStep >= 2) {
+      setOnboardStep(-1);
+      await AsyncStorage.setItem(ONBOARD_KEY, "done");
+    } else {
+      setOnboardStep(onboardStep + 1);
+    }
+  };
+
   const screenW = Dimensions.get("window").width - 32;
 
   const pickImage = async () => {
@@ -44,6 +67,41 @@ export default function PhotoAudit() {
       w: a.width, h: a.height,
     });
     setPoints([]); setObstacles([]); setObstacleSuggestions([]); setResult(null);
+    // Easy-Mode: 3-Werte-Wizard automatisch öffnen
+    setTimeout(() => setWizardOpen(true), 400);
+  };
+
+  /** Easy-Mode Wizard: α + h_T + h_F → Engine + automatische Vorschau-Box */
+  const submitWizard = async () => {
+    const alpha = parseFloat(wizard.alpha) || 0;
+    const h_t = parseFloat(wizard.h_t) || 0;
+    const h_f = parseFloat(wizard.h_f) || 0;
+    if (alpha <= 0 || h_t <= 0 || h_f <= 0 || h_f < h_t) {
+      Alert.alert("Eingabe prüfen", "Alle 3 Werte müssen > 0 sein, und Firsthöhe ≥ Traufhöhe.");
+      return;
+    }
+    // Default Trauflänge: User kann später über Referenzmaß anpassen
+    const W = parseFloat(refMeters) || 10;
+    try {
+      const r = await apiPost<any>("/roof-engine/compute", {
+        alpha_deg: alpha, h_traufe: h_t, h_first: h_f, breite_traufe: W,
+      });
+      setEngineResult(r);
+    } catch {}
+
+    // Vorschau-Box: zentrale Box, Seitenverhältnis W:L aus Engine
+    if (image) {
+      // Ideale 2D-Projektion: Bildfläche 60%, zentriert
+      const padX = image.w * 0.15;
+      const padY = image.h * 0.20;
+      setPoints([
+        { x: padX, y: padY },                           // TL
+        { x: image.w - padX, y: padY },                 // TR
+        { x: image.w - padX, y: image.h - padY },       // BR
+        { x: padX, y: image.h - padY },                 // BL
+      ]);
+    }
+    setWizardOpen(false);
   };
 
   const takePhoto = async () => {
@@ -349,6 +407,107 @@ export default function PhotoAudit() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* ═══════════ 3-WERTE-WIZARD ═══════════ */}
+      <Modal visible={wizardOpen} transparent animationType="slide"
+             onRequestClose={() => setWizardOpen(false)}>
+        <View style={s.wizOverlay}>
+          <View style={s.wizBox}>
+            <View style={s.wizHead}>
+              <Ionicons name="flash" size={22} color={colors.accent} />
+              <Text style={s.wizT}>NUR 3 WERTE</Text>
+              <TouchableOpacity onPress={() => setWizardOpen(false)}>
+                <Ionicons name="close" size={22} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={s.wizSub}>
+              Für perfekte Präzision benötigt die KI nur diese 3 Werte:
+            </Text>
+
+            <View style={s.wizField}>
+              <View style={s.wizFieldHead}>
+                <Ionicons name="triangle-outline" size={14} color={colors.primary} />
+                <Text style={s.wizLabel}>Dachneigung α</Text>
+                <Text style={s.wizHint}>(°)</Text>
+              </View>
+              <TextInput value={wizard.alpha}
+                onChangeText={v => setWizard({ ...wizard, alpha: v })}
+                style={s.wizInput} keyboardType="decimal-pad"
+                placeholder="z.B. 35" placeholderTextColor={colors.textDisabled} />
+              <Text style={s.wizTip}>Typisch 30–45° bei Satteldächern</Text>
+            </View>
+
+            <View style={s.wizField}>
+              <View style={s.wizFieldHead}>
+                <Ionicons name="arrow-up" size={14} color={colors.primary} />
+                <Text style={s.wizLabel}>Traufhöhe h_T</Text>
+                <Text style={s.wizHint}>(m vom Boden zur Traufkante)</Text>
+              </View>
+              <TextInput value={wizard.h_t}
+                onChangeText={v => setWizard({ ...wizard, h_t: v })}
+                style={s.wizInput} keyboardType="decimal-pad"
+                placeholder="z.B. 4.5" placeholderTextColor={colors.textDisabled} />
+            </View>
+
+            <View style={s.wizField}>
+              <View style={s.wizFieldHead}>
+                <Ionicons name="arrow-up-circle" size={14} color={colors.primary} />
+                <Text style={s.wizLabel}>Firsthöhe h_F</Text>
+                <Text style={s.wizHint}>(m vom Boden zum Firstpunkt)</Text>
+              </View>
+              <TextInput value={wizard.h_f}
+                onChangeText={v => setWizard({ ...wizard, h_f: v })}
+                style={s.wizInput} keyboardType="decimal-pad"
+                placeholder="z.B. 7.5" placeholderTextColor={colors.textDisabled} />
+            </View>
+
+            <TouchableOpacity onPress={submitWizard} style={s.wizBtn} testID="wizard-submit">
+              <Ionicons name="flash" size={18} color="#000" />
+              <Text style={s.wizBtnT}>Übernehmen & Vorschau-Box</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setWizardOpen(false)} style={s.wizSkip}>
+              <Text style={s.wizSkipT}>Überspringen (manuell markieren)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ═══════════ ONBOARDING (nur beim ersten Aufruf) ═══════════ */}
+      {onboardStep >= 0 && (
+        <View style={s.obOverlay}>
+          <View style={s.obCard}>
+            <View style={s.obStep}>
+              <Text style={s.obStepN}>{onboardStep + 1}/3</Text>
+            </View>
+            <Ionicons
+              name={onboardStep === 0 ? "image-outline" : onboardStep === 1 ? "scan" : "sparkles"}
+              size={32} color={colors.primary} />
+            <Text style={s.obTitle}>
+              {onboardStep === 0 && "Schritt 1: Foto wählen"}
+              {onboardStep === 1 && "Schritt 2: Eckpunkte grob markieren"}
+              {onboardStep === 2 && "Schritt 3: Maße & Blueprint"}
+            </Text>
+            <Text style={s.obText}>
+              {onboardStep === 0 && "Nimm ein Foto deines Dachs auf oder wähle eins aus der Galerie. Je direkter von oben, desto besser die KI-Erkennung."}
+              {onboardStep === 1 && "Die KI hilft dir mit Auto-Snap! Oder setze die 4 Eckpunkte (TL, TR, BR, BL) mit dem Finger — grob reicht."}
+              {onboardStep === 2 && "Gib die 3 Kernmaße ein (Neigung, Traufhöhe, Firsthöhe). Die Engine berechnet alles andere — Blueprint fertig in Sekunden!"}
+            </Text>
+            <TouchableOpacity onPress={nextOnboard} style={s.obNext}>
+              <Text style={s.obNextT}>
+                {onboardStep < 2 ? "Weiter" : "Loslegen"}
+              </Text>
+              <Ionicons name="arrow-forward" size={16} color="#000" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={async () => {
+              setOnboardStep(-1);
+              await AsyncStorage.setItem(ONBOARD_KEY, "skipped");
+            }}>
+              <Text style={s.obSkip}>Überspringen</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
     </SafeAreaView>
   );
 }
@@ -400,6 +559,34 @@ const s = StyleSheet.create({
   },
   snapT: { color: "#000", fontSize: 14, fontWeight: "900", letterSpacing: 1 },
   snapS: { color: "rgba(0,0,0,0.7)", fontSize: 11, marginTop: 1 },
+
+  /* 3-Werte-Wizard Modal */
+  wizOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", alignItems: "center", padding: 20 },
+  wizBox: { width: "100%", maxWidth: 400, backgroundColor: colors.paper, borderRadius: 20, padding: 20, borderWidth: 2, borderColor: colors.accent, gap: 12 },
+  wizHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  wizT: { flex: 1, color: colors.accent, fontSize: 14, fontWeight: "900", letterSpacing: 1.4 },
+  wizSub: { color: colors.textSecondary, fontSize: 13, lineHeight: 19 },
+  wizField: { gap: 6 },
+  wizFieldHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  wizLabel: { color: colors.textPrimary, fontSize: 13, fontWeight: "800", flex: 1 },
+  wizHint: { color: colors.textSecondary, fontSize: 10 },
+  wizInput: { backgroundColor: colors.bgDeep, borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, color: colors.textPrimary, fontSize: 16, fontWeight: "800" },
+  wizTip: { color: colors.textSecondary, fontSize: 10, fontStyle: "italic" },
+  wizBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, padding: 14, borderRadius: 12, backgroundColor: colors.primary, marginTop: 6 },
+  wizBtnT: { color: "#000", fontSize: 14, fontWeight: "900", letterSpacing: 0.6 },
+  wizSkip: { padding: 8, alignItems: "center" },
+  wizSkipT: { color: colors.textSecondary, fontSize: 11, textDecorationLine: "underline" },
+
+  /* Onboarding */
+  obOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.85)", justifyContent: "center", alignItems: "center", padding: 20, zIndex: 999 },
+  obCard: { width: "100%", maxWidth: 360, backgroundColor: colors.paper, borderRadius: 20, padding: 24, borderWidth: 2, borderColor: colors.primary, gap: 12, alignItems: "center" },
+  obStep: { position: "absolute", top: 12, right: 12, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, backgroundColor: colors.primary },
+  obStepN: { color: "#000", fontSize: 10, fontWeight: "900", letterSpacing: 0.6 },
+  obTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: "900", textAlign: "center" },
+  obText: { color: colors.textSecondary, fontSize: 13, lineHeight: 20, textAlign: "center" },
+  obNext: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, paddingHorizontal: 24, borderRadius: 999, backgroundColor: colors.primary, marginTop: 6 },
+  obNextT: { color: "#000", fontSize: 14, fontWeight: "900", letterSpacing: 0.6 },
+  obSkip: { color: colors.textSecondary, fontSize: 11, textDecorationLine: "underline", marginTop: 4 },
   smallBtnT: { color: colors.textPrimary, fontSize: 12, fontWeight: "700" },
   refRow: { flexDirection: "row", alignItems: "center", gap: 5, flexWrap: "wrap" },
   refTxt: { color: colors.textSecondary, fontSize: 12, fontWeight: "700", marginRight: 4 },
