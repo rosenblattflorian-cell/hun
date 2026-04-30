@@ -101,10 +101,22 @@ type GeometryResult = {
   suggested_type: "satteldach" | "pultdach" | "walmdach" | "flachdach";
 };
 
+type ActiveModule = {
+  id: string;
+  name: string; brand: string;
+  leistung_wp: number;
+  laenge_mm: number; breite_mm: number;
+  gewicht_kg: number;
+  glas_glas: boolean;
+  technologie: string;
+};
+
 export default function BlueprintScreen() {
   const router = useRouter();
   const [audits, setAudits] = useState<Audit[]>([]);
   const [photoAudits, setPhotoAudits] = useState<PhotoAudit[]>([]);
+  const [activeModules, setActiveModules] = useState<ActiveModule[]>([]);
+  const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -127,6 +139,11 @@ export default function BlueprintScreen() {
     try {
       setAudits(await apiGet<Audit[]>("/roof-audits"));
       setPhotoAudits(await apiGet<PhotoAudit[]>("/photo-audits"));
+      // Aktive Module für Layout-Sync (Admin-DB → Blueprint)
+      try {
+        const mods = await apiGet<ActiveModule[]>("/admin/modules?active_only=true");
+        setActiveModules(mods);
+      } catch { /* customer hat keinen Zugriff auf admin/modules — OK */ }
     } catch {}
   };
   useFocusEffect(useCallback(() => { load(); }, []));
@@ -340,6 +357,49 @@ export default function BlueprintScreen() {
               <Text style={s.proBadgeT}>PRO</Text>
             </View>
           </View>
+
+          {/* Module-Selector — Sync mit Admin-DB */}
+          {activeModules.length > 0 && (
+            <View style={s.modSelectorBox}>
+              <View style={s.modSelectorHead}>
+                <Ionicons name="cube" size={14} color={colors.primary} />
+                <Text style={s.modSelectorT}>AKTIVE MODUL-DB · {activeModules.length} Modelle</Text>
+              </View>
+              <Text style={s.modSelectorSub}>
+                Synchronisiert mit Admin-Stammdaten — Maße werden automatisch in PV-Layout übernommen
+              </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}
+                          contentContainerStyle={{ gap: 6 }}>
+                {activeModules.map(m => (
+                  <TouchableOpacity key={m.id}
+                    onPress={() => setSelectedModuleId(selectedModuleId === m.id ? null : m.id)}
+                    style={[s.modChip, selectedModuleId === m.id && s.modChipActive]}
+                    testID={`module-chip-${m.id}`}
+                  >
+                    <Text style={[s.modChipBrand, selectedModuleId === m.id && { color: "#000" }]}>
+                      {m.brand}
+                    </Text>
+                    <Text style={[s.modChipName, selectedModuleId === m.id && { color: "#000" }]} numberOfLines={1}>
+                      {m.name}
+                    </Text>
+                    <View style={{ flexDirection: "row", gap: 4 }}>
+                      <Text style={[s.modChipSpec, { color: selectedModuleId === m.id ? "#000" : colors.primary }]}>
+                        {m.leistung_wp}Wp
+                      </Text>
+                      <Text style={[s.modChipSpec, selectedModuleId === m.id && { color: "#000" }]}>
+                        · {m.laenge_mm}×{m.breite_mm}mm
+                      </Text>
+                      {m.glas_glas && (
+                        <Text style={[s.modChipSpec, { color: selectedModuleId === m.id ? "#000" : colors.accent }]}>
+                          GG
+                        </Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
 
           {/* Universal Roof Engine — Trigonometrie + Gerüst */}
           <View style={s.engineBox}>
@@ -850,4 +910,24 @@ const s = StyleSheet.create({
   scaffoldHead: { flexDirection: "row", alignItems: "center", gap: 6, paddingTop: 10, marginTop: 4, borderTopWidth: 1, borderTopColor: colors.accent },
   scaffoldT: { color: colors.accent, fontSize: 10, fontWeight: "900", letterSpacing: 1 },
   heroBtnEngine: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, padding: 12, borderRadius: 10, backgroundColor: colors.accent, marginTop: 8 },
+
+  /* Module Selector — Sync mit Admin-DB */
+  modSelectorBox: {
+    padding: spacing.md, borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderWidth: 1, borderColor: colors.border,
+    marginBottom: spacing.sm,
+  },
+  modSelectorHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  modSelectorT: { color: colors.primary, fontSize: 11, fontWeight: "900", letterSpacing: 1.2 },
+  modSelectorSub: { color: colors.textSecondary, fontSize: 11, marginTop: 4 },
+  modChip: {
+    minWidth: 160, padding: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bg,
+    gap: 2,
+  },
+  modChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  modChipBrand: { color: colors.textSecondary, fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
+  modChipName: { color: colors.textPrimary, fontSize: 12, fontWeight: "800" },
+  modChipSpec: { fontSize: 10, fontWeight: "700" },
 });

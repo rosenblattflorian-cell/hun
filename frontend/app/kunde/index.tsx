@@ -44,6 +44,52 @@ export default function KundePortal() {
     }
   };
 
+  /** Direkt-Download von Blueprint-Files (Web: Blob → anchor). */
+  const downloadFile = async (endpoint: string, fallbackName: string, body: any, _mime: string) => {
+    try {
+      const token = await AsyncStorage.getItem("access_token");
+      const r = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api${endpoint}`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error("Download fehlgeschlagen");
+      const blob = await r.blob();
+      const cd = r.headers.get("content-disposition") || "";
+      const m = cd.match(/filename="?([^"]+)"?/);
+      const filename = m?.[1] || fallbackName;
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+      }
+    } catch (e: any) {
+      Alert.alert("Download-Fehler", e.message);
+    }
+  };
+
+  const downloadObj = async (auditId: string) => {
+    try {
+      const token = await AsyncStorage.getItem("access_token");
+      const r = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/blueprint/obj`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ audit_id: auditId }),
+      });
+      if (!r.ok) throw new Error("OBJ-Fehler");
+      const data = await r.json();
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        const blob = new Blob([data.obj], { type: "model/obj" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = data.filename_obj;
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+    } catch (e: any) { Alert.alert("Fehler", e.message); }
+  };
+
   const shareReferral = async (code: string) => {
     const msg = `Ich bin begeistert von meiner Solar-Mitte PV-Anlage! Mit meinem Code *${code}* bekommst Du bei Solar Mitte einen besonderen Vorteil. https://solar-mitte.de/empfehlung?c=${code}`;
     try {
@@ -119,6 +165,27 @@ export default function KundePortal() {
                     : "Top-Down-Ansicht Ihres digitalen Dach-Zwillings. Im Browser auch in 3D drehbar."}
                 </Text>
                 <RoofViewer3D auditId={data.blueprint_audit_id} height={300} />
+
+                {/* Download-Center direkt unter 3D-Viewer */}
+                <View style={s.downloadRow}>
+                  <DownloadButton
+                    label="Blueprint" sub="PDF" icon="document-text"
+                    color="#FF3B30"
+                    onPress={() => downloadFile("/blueprint/pdf", "Blueprint.pdf",
+                      { audit_id: data.blueprint_audit_id }, "application/pdf")}
+                  />
+                  <DownloadButton
+                    label="CAD-Daten" sub="DXF" icon="construct"
+                    color={colors.primary}
+                    onPress={() => downloadFile("/blueprint/dxf", "Plan.dxf",
+                      { audit_id: data.blueprint_audit_id }, "application/dxf")}
+                  />
+                  <DownloadButton
+                    label="3D-Modell" sub="OBJ" icon="cube"
+                    color={colors.accent}
+                    onPress={() => downloadObj(data.blueprint_audit_id)}
+                  />
+                </View>
               </View>
             )}
 
@@ -243,6 +310,18 @@ export default function KundePortal() {
   );
 }
 
+function DownloadButton({ label, sub, icon, color, onPress }: any) {
+  return (
+    <TouchableOpacity onPress={onPress} style={[s.dlBtn, { borderColor: color }]} activeOpacity={0.85}>
+      <View style={[s.dlIcon, { backgroundColor: `${color}22`, borderColor: color }]}>
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <Text style={s.dlLabel}>{label}</Text>
+      <Text style={[s.dlSub, { color }]}>{sub}</Text>
+    </TouchableOpacity>
+  );
+}
+
 const s = StyleSheet.create({
   hero: { padding: 24, paddingBottom: 20 },
   heroGlow: { position: "absolute", top: -40, right: -60, width: 200, height: 200, borderRadius: 999, backgroundColor: `${colors.primary}22` },
@@ -286,6 +365,22 @@ const s = StyleSheet.create({
   refBtnT: { color: "#000", fontWeight: "900", fontSize: 15 },
   supportT: { color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
   supportD: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
+  // ── Footer / Empfehlungs-Code ──
+  shareBox: { padding: 20, borderRadius: 14, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border, marginTop: 8 },
+  shareCode: { color: colors.accent, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", fontSize: 18, fontWeight: "900", letterSpacing: 2, marginTop: 6 },
+  shareBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, padding: 12, borderRadius: 10, backgroundColor: colors.primary, marginTop: 12 },
+  shareBtnT: { color: "#000", fontWeight: "900", fontSize: 14 },
+
+  // ── Download-Center ──
+  downloadRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  dlBtn: {
+    flex: 1, alignItems: "center", padding: 12, borderRadius: 12,
+    borderWidth: 1.5, backgroundColor: colors.bg, gap: 4,
+  },
+  dlIcon: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center", borderWidth: 1.5 },
+  dlLabel: { color: colors.textPrimary, fontSize: 11, fontWeight: "800", marginTop: 4 },
+  dlSub: { fontSize: 9, fontWeight: "900", letterSpacing: 1 },
+
   logoutBtn: { marginTop: 20, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border },
   logoutT: { color: colors.textPrimary, fontWeight: "700" },
   helpT: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, marginBottom: 12 },

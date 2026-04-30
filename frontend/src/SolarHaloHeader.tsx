@@ -35,7 +35,8 @@ type Props = {
   showCircuit?: boolean;
 };
 
-const { width: SW } = Dimensions.get("window");
+const { width: SW, height: SH } = Dimensions.get("window");
+const IS_SMALL = SW < 380;     // iPhone SE, kleine Phones
 
 export function SolarHaloHeader({
   name, greeting = "Willkommen zurück",
@@ -44,7 +45,9 @@ export function SolarHaloHeader({
   mode = "full",
   showCircuit = true,
 }: Props) {
-  const haloSize = mode === "full" ? Math.min(SW * 0.55, 280) : 100;
+  const haloSize = mode === "full"
+    ? Math.min(SW * (IS_SMALL ? 0.45 : 0.55), 280)
+    : 100;
   const avatarSize = haloSize * 0.55;
 
   // Pulse-Animation (Halo skaliert subtil + Opacity-Modulation)
@@ -104,8 +107,8 @@ export function SolarHaloHeader({
         </View>
       </View>
 
-      {/* SOLAR MITTE Schriftzug (nur im Full-Modus) */}
-      {mode === "full" && (
+      {/* SOLAR MITTE Schriftzug (nur im Full-Modus auf größeren Screens) */}
+      {mode === "full" && !IS_SMALL && (
         <View style={s.brand}>
           <Text style={s.brandSolar}>SOLAR</Text>
           <View style={s.brandMittRow}>
