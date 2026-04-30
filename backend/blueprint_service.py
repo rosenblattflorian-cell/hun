@@ -179,6 +179,16 @@ class PvModule:
     label: Optional[str] = None
 
 @dataclass
+class ScaffoldingOverlay:
+    """Optionale Gerüst-Annotation für Blueprint-Export."""
+    flaeche_m2: float
+    hoehe_traufe: float
+    hoehe_geruest: float
+    laenge_geruest: float
+    lastklasse: str = "3"
+
+
+@dataclass
 class RoofBlueprintData:
     project_title: str
     customer_name: str
@@ -192,6 +202,7 @@ class RoofBlueprintData:
     obstacles: List[Obstacle] = field(default_factory=list)
     modules: List[PvModule] = field(default_factory=list)
     company_name: str = "Solar Mitte GmbH"
+    scaffolding: Optional[ScaffoldingOverlay] = None    # Optional: Gerüst-Overlay
 
     @property
     def is_hipped(self) -> bool:
@@ -207,14 +218,15 @@ class RoofBlueprintData:
 # Diese Layer-Namen werden von K2 Base ohne Umbenennen direkt erkannt.
 
 DXF_LAYERS = {
-    "K2_OUTLINE":   {"color": 1,  "lineweight": 50},   # red, dick — Außenkontur Dach
-    "K2_RIDGE":     {"color": 5,  "lineweight": 35},   # blue       — First
-    "K2_EAVE":      {"color": 3,  "lineweight": 35},   # green      — Traufe
-    "K2_HIP":       {"color": 6,  "lineweight": 35},   # magenta    — Walm
-    "K2_DIM":       {"color": 2,  "lineweight": 18},   # yellow     — Bemaßungen
-    "K2_OBSTACLE":  {"color": 1,  "lineweight": 50},   # red        — VERBOTSZONE (KEEP-OUT)
-    "K2_LABEL":     {"color": 7,  "lineweight": 18},   # white      — Beschriftungen
-    "K2_MODULE":    {"color": 4,  "lineweight": 25},   # cyan       — geplante Module
+    "K2_OUTLINE":     {"color": 1,  "lineweight": 50},   # red, dick — Außenkontur Dach
+    "K2_RIDGE":       {"color": 5,  "lineweight": 35},   # blue       — First
+    "K2_EAVE":        {"color": 3,  "lineweight": 35},   # green      — Traufe
+    "K2_HIP":         {"color": 6,  "lineweight": 35},   # magenta    — Walm
+    "K2_DIM":         {"color": 2,  "lineweight": 18},   # yellow     — Bemaßungen
+    "K2_OBSTACLE":    {"color": 1,  "lineweight": 50},   # red        — VERBOTSZONE (KEEP-OUT)
+    "K2_LABEL":       {"color": 7,  "lineweight": 18},   # white      — Beschriftungen
+    "K2_MODULE":      {"color": 4,  "lineweight": 25},   # cyan       — geplante Module
+    "K2_SCAFFOLDING": {"color": 8,  "lineweight": 25},   # darkgrey   — Gerüst-Verlauf (DASHED)
 }
 
 
@@ -341,6 +353,35 @@ def generate_dxf(data: RoofBlueprintData) -> bytes:
         f"Kunde: {data.customer_name}   |   {data.address}",
         dxfattribs={"layer": "K2_LABEL", "height": 0.2, "color": 7},
     ).set_placement((0, -3.6), align=TextEntityAlignment.LEFT)
+
+    # ---- 7) K2_SCAFFOLDING — Gerüst-Verlauf um den Dachumriss ----
+    # Gestrichelte Polyline (Linetype DASHED2) mit 1.0m seitlichem Offset
+    # gemäß Gerüst-Kalkulation. Annotiert mit "GERÜST: m² (Lastklasse, h_T)".
+    if data.scaffolding:
+        # DASHED2-Linetype sicherstellen
+        if "DASHED2" not in doc.linetypes:
+            doc.linetypes.add("DASHED2", pattern="A,0.5,-0.25,0.5,-0.25", description="Dashed double")
+        SC_OFFSET = 1.0  # m seitlicher Überstand
+        # Polygon um Dach: Sattel/Walm vs. Pult anders, vereinfachen wir hier auf Rechteck-Hülle
+        scaff_outline = [
+            (-SC_OFFSET, -SC_OFFSET),
+            (L + SC_OFFSET, -SC_OFFSET),
+            (L + SC_OFFSET, B + SC_OFFSET),
+            (-SC_OFFSET, B + SC_OFFSET),
+            (-SC_OFFSET, -SC_OFFSET),
+        ]
+        msp.add_lwpolyline(scaff_outline, dxfattribs={
+            "layer": "K2_SCAFFOLDING",
+            "linetype": "DASHED2",
+            "closed": True,
+        })
+        # Annotation oben links
+        sc = data.scaffolding
+        msp.add_text(
+            f"GERÜST: {sc.flaeche_m2:.1f} m²  |  Lastklasse {sc.lastklasse}  |  h_T={sc.hoehe_traufe:.2f}m",
+            dxfattribs={"layer": "K2_SCAFFOLDING", "height": 0.22, "color": 8},
+        ).set_placement((-SC_OFFSET, B + SC_OFFSET + 0.5),
+                         align=TextEntityAlignment.LEFT)
 
     # Output to bytes
     buf = BytesIO()
@@ -476,6 +517,27 @@ def generate_pdf_blueprint(data: RoofBlueprintData, project_number: Optional[str
     }
     type_counter: Dict[str, int] = {}
     obstacle_legend = []  # für Legende: [(id, type_label, label), ...]
+
+    # ---- SCAFFOLDING-Linie (gestrichelt, dezentes Blaugrau) ----
+    # Vor den KEEPOUTs gezeichnet, damit sie ggf. unten liegt.
+    if data.scaffolding:
+        SC_OFFSET = 1.0  # m
+        c.setStrokeColor(HexColor("#5A6E85"))   # dezentes Blaugrau
+        c.setLineWidth(1.0)
+        c.setDash(4, 3)
+        # Hülle = Bounding-Rect mit Offset
+        c.rect(mx(-SC_OFFSET), my(-SC_OFFSET),
+               (L + 2 * SC_OFFSET) * scale, (B + 2 * SC_OFFSET) * scale,
+               stroke=1, fill=0)
+        c.setDash()
+        # Annotation oben rechts der Gerüst-Hülle
+        sc = data.scaffolding
+        c.setFillColor(HexColor("#5A6E85"))
+        c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(mx(-SC_OFFSET) + 4,
+                     my(B + SC_OFFSET) + 2,
+                     f"GERÜST: {sc.flaeche_m2:.1f} m²  ·  Lastklasse {sc.lastklasse}  ·  h_T = {sc.hoehe_traufe:.2f} m")
+        c.setLineWidth(1.4)
 
     c.setFillColor(HexColor("#FFE5E5"))
     c.setStrokeColor(HexColor("#D32F2F"))

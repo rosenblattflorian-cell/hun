@@ -1640,6 +1640,8 @@ class BlueprintRequest(BaseModel):
     customer_id: Optional[str] = None
     obstacles: List[ObstacleRequest] = Field(default_factory=list)
     modules: List[ModuleRequest] = Field(default_factory=list)
+    # Optional: Gerüst-Annotation für Blueprint
+    h_traufe: Optional[float] = None      # Wenn gesetzt → Gerüst-Linie + Annotation
 
 
 async def _resolve_blueprint_data(req: BlueprintRequest) -> RoofBlueprintData:
@@ -1693,9 +1695,28 @@ async def _resolve_blueprint_data(req: BlueprintRequest) -> RoofBlueprintData:
     return from_roof_audit(audit_dict, customer_dict, obstacles_pct, modules_pct=modules_pct)
 
 
+async def _resolve_blueprint_data_with_scaffold(req: BlueprintRequest) -> RoofBlueprintData:
+    """Wie _resolve_blueprint_data, aber mit optionaler Gerüst-Annotation."""
+    data = await _resolve_blueprint_data(req)
+    if req.h_traufe and req.h_traufe > 0:
+        try:
+            scaff = calculate_scaffolding(req.h_traufe, data.laenge)
+            from blueprint_service import ScaffoldingOverlay
+            data.scaffolding = ScaffoldingOverlay(
+                flaeche_m2=scaff.flaeche_m2,
+                hoehe_traufe=req.h_traufe,
+                hoehe_geruest=scaff.hoehe_geruest_m,
+                laenge_geruest=scaff.laenge_geruest_m,
+                lastklasse=scaff.lastklasse.split(" ")[0],  # nur "3"
+            )
+        except Exception as e:
+            logger.warning(f"Scaffolding overlay skipped: {e}")
+    return data
+
+
 @app.post("/api/blueprint/dxf")
 async def api_blueprint_dxf(req: BlueprintRequest, user: dict = Depends(get_current_user)):
-    data = await _resolve_blueprint_data(req)
+    data = await _resolve_blueprint_data_with_scaffold(req)
     try:
         dxf_bytes = generate_dxf(data)
     except Exception as e:
@@ -1711,7 +1732,7 @@ async def api_blueprint_dxf(req: BlueprintRequest, user: dict = Depends(get_curr
 
 @app.post("/api/blueprint/pdf")
 async def api_blueprint_pdf(req: BlueprintRequest, user: dict = Depends(get_current_user)):
-    data = await _resolve_blueprint_data(req)
+    data = await _resolve_blueprint_data_with_scaffold(req)
     try:
         pdf_bytes = generate_pdf_blueprint(data)
     except Exception as e:
@@ -1743,7 +1764,7 @@ async def api_blueprint_obj(req: BlueprintRequest, user: dict = Depends(get_curr
 
 @app.post("/api/blueprint/png")
 async def api_blueprint_png(req: BlueprintRequest, user: dict = Depends(get_current_user)):
-    data = await _resolve_blueprint_data(req)
+    data = await _resolve_blueprint_data_with_scaffold(req)
     try:
         png_bytes = generate_png_topdown(data)
     except Exception as e:
@@ -2070,6 +2091,153 @@ async def api_roof_engine_push_hero(
     return log_entry
 
 # ====================== /UNIVERSAL ROOF ENGINE ======================
+
+
+# ====================== ADMIN — MODUL-STAMMDATEN ======================
+# Verwaltung der PV-Modul-Master-Daten ohne Code-Deployment.
+# Admin-only CRUD: legt neue Module an (z.B. 450W Glas-Glas), aktualisiert
+# Specs (Wp, Maße, Gewicht), markiert obsolete Modelle als inaktiv.
+
+class ModuleMaster(BaseModel):
+    name: str = Field(..., min_length=2)
+    brand: str = Field(..., min_length=1)
+    leistung_wp: int = Field(..., gt=0, le=2000)
+    laenge_mm: int = Field(..., gt=100)
+    breite_mm: int = Field(..., gt=100)
+    dicke_mm: int = Field(default=35, ge=10, le=100)
+    gewicht_kg: float = Field(..., gt=0, le=50)
+    glas_glas: bool = False
+    technologie: Literal["mono", "poly", "tdk", "n-type", "topcon", "hjt", "perc"] = "mono"
+    zellen_count: int = Field(default=144, ge=36, le=200)
+    beschreibung: Optional[str] = None
+    datasheet_url: Optional[str] = None
+    active: bool = True
+
+
+class ModuleMasterUpdate(BaseModel):
+    name: Optional[str] = None
+    brand: Optional[str] = None
+    leistung_wp: Optional[int] = None
+    laenge_mm: Optional[int] = None
+    breite_mm: Optional[int] = None
+    dicke_mm: Optional[int] = None
+    gewicht_kg: Optional[float] = None
+    glas_glas: Optional[bool] = None
+    technologie: Optional[str] = None
+    zellen_count: Optional[int] = None
+    beschreibung: Optional[str] = None
+    datasheet_url: Optional[str] = None
+    active: Optional[bool] = None
+
+
+def _require_admin(user: dict):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Nur Admins dürfen Modul-Stammdaten verwalten.")
+
+
+@app.get("/api/admin/modules")
+async def api_admin_list_modules(
+    active_only: bool = False,
+    user: dict = Depends(get_current_user),
+):
+    """Listet alle Module (optional nur aktive)."""
+    q = {"active": True} if active_only else {}
+    cur = db.module_master.find(q, {"_id": 0}).sort("brand", 1).limit(500)
+    return await cur.to_list(500)
+
+
+@app.get("/api/admin/modules/{module_id}")
+async def api_admin_get_module(module_id: str, user: dict = Depends(get_current_user)):
+    m = await db.module_master.find_one({"id": module_id}, {"_id": 0})
+    if not m:
+        raise HTTPException(404, "Modul nicht gefunden")
+    return m
+
+
+@app.post("/api/admin/modules", status_code=201)
+async def api_admin_create_module(req: ModuleMaster, user: dict = Depends(get_current_user)):
+    """Legt ein neues Modul an (Admin only)."""
+    _require_admin(user)
+    doc = req.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    doc["updated_at"] = doc["created_at"]
+    doc["created_by"] = user["id"]
+    await db.module_master.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@app.put("/api/admin/modules/{module_id}")
+async def api_admin_update_module(
+    module_id: str, req: ModuleMasterUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Aktualisiert Specs eines Moduls (Admin only)."""
+    _require_admin(user)
+    update = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not update:
+        raise HTTPException(400, "Keine Änderungen.")
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    update["updated_by"] = user["id"]
+    r = await db.module_master.update_one({"id": module_id}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Modul nicht gefunden")
+    m = await db.module_master.find_one({"id": module_id}, {"_id": 0})
+    return m
+
+
+@app.delete("/api/admin/modules/{module_id}")
+async def api_admin_delete_module(module_id: str, user: dict = Depends(get_current_user)):
+    """Löscht ein Modul (Admin only). Soft-Delete via active=false empfohlen."""
+    _require_admin(user)
+    r = await db.module_master.delete_one({"id": module_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Modul nicht gefunden")
+    return {"deleted": True, "id": module_id}
+
+
+@app.post("/api/admin/modules/seed")
+async def api_admin_seed_modules(user: dict = Depends(get_current_user)):
+    """Lädt Standard-Module (Trina, JA Solar, Meyer Burger, Q-Cells, ...) initial."""
+    _require_admin(user)
+    seed_modules = [
+        {"name": "Vertex S+ NEG18R.28", "brand": "Trina Solar",  "leistung_wp": 450,
+         "laenge_mm": 1762, "breite_mm": 1134, "dicke_mm": 30, "gewicht_kg": 22.0,
+         "glas_glas": True,  "technologie": "topcon", "zellen_count": 144,
+         "beschreibung": "Premium Glas-Glas N-Type"},
+        {"name": "JAM54D40 LB",          "brand": "JA Solar",    "leistung_wp": 435,
+         "laenge_mm": 1722, "breite_mm": 1134, "dicke_mm": 30, "gewicht_kg": 21.5,
+         "glas_glas": False, "technologie": "n-type", "zellen_count": 108,
+         "beschreibung": "Bifazial N-Type"},
+        {"name": "White Performance 2",  "brand": "Meyer Burger", "leistung_wp": 400,
+         "laenge_mm": 1767, "breite_mm": 1041, "dicke_mm": 35, "gewicht_kg": 20.0,
+         "glas_glas": False, "technologie": "hjt", "zellen_count": 120,
+         "beschreibung": "Made in Germany, HJT"},
+        {"name": "Q.PEAK DUO ML-G11.3",  "brand": "Q CELLS",     "leistung_wp": 410,
+         "laenge_mm": 1722, "breite_mm": 1134, "dicke_mm": 32, "gewicht_kg": 21.5,
+         "glas_glas": False, "technologie": "perc", "zellen_count": 132,
+         "beschreibung": "Q.ANTUM DUO Z Technologie"},
+        {"name": "Tiger Neo N-Type",     "brand": "Jinko Solar", "leistung_wp": 460,
+         "laenge_mm": 1762, "breite_mm": 1134, "dicke_mm": 30, "gewicht_kg": 22.5,
+         "glas_glas": True, "technologie": "topcon", "zellen_count": 144,
+         "beschreibung": "Premium Glas-Glas N-Type"},
+    ]
+    inserted = 0
+    for sm in seed_modules:
+        existing = await db.module_master.find_one({"name": sm["name"], "brand": sm["brand"]})
+        if not existing:
+            doc = sm.copy()
+            doc["id"] = str(uuid.uuid4())
+            doc["active"] = True
+            doc["created_at"] = datetime.now(timezone.utc).isoformat()
+            doc["updated_at"] = doc["created_at"]
+            doc["created_by"] = user["id"]
+            await db.module_master.insert_one(doc)
+            inserted += 1
+    return {"seeded": inserted, "total": len(seed_modules)}
+
+# ====================== /ADMIN MODUL-STAMMDATEN ======================
 
 app.add_middleware(
     CORSMiddleware,
