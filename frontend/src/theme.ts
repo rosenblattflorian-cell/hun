@@ -1,14 +1,14 @@
 import { StyleSheet } from "react-native";
 
 // Solar Mitte Brand Colors — Top-Tier Branding (User-Vorgabe)
-//   bg = Deep Navy/Schwarz  · primary = Bright Apple Green · accent = Warn-Gelb
+//   bg = REIN SCHWARZ  · primary = Bright Apple Green · accent = Warn-Gelb
 export const colors = {
   // Hintergründe
-  bg: "#0A1628",                // Deep Navy (statt rein-schwarz für Premium-Look)
-  bgDeep: "#050B14",            // noch dunkler für Hero-Sektionen
-  paper: "#0F1E33",             // Cards (Navy gehoben)
-  elevated: "#152740",          // Hover/Elevated Cards
-  surface: "#0C1A2E",           // Subsurface
+  bg: "#000000",                // Reines Schwarz (User-Vorgabe)
+  bgDeep: "#000000",            // dito für Hero-Sektionen
+  paper: "#0A0A0A",             // Cards (sehr dunkles Schwarz)
+  elevated: "#161616",          // Hover/Elevated Cards
+  surface: "#0F0F0F",           // Subsurface
 
   // Brand
   primary: "#00C853",           // Bright Apple Green (primäre Action-Color)
@@ -18,28 +18,28 @@ export const colors = {
   accentDark: "#E6C200",
   accentGlow: "rgba(255,214,0,0.18)",
 
-  // Status
+  // Status (Info-Blau ersetzt durch dezentes Grau)
   secondary: "#FFD600",
   secondaryDark: "#E6C200",
   danger: "#FF3B30",
-  info: "#0A84FF",
+  info: "#8E8E93",              // Slate-Grau statt blau
   orange: "#FF9500",
   warn: "#FFD600",
   success: "#00C853",
 
   // Text
   textPrimary: "#FFFFFF",
-  textSecondary: "#94A3B8",     // Slate 400 — bessere Lesbarkeit auf Navy
-  textDisabled: "#475569",      // Slate 600
+  textSecondary: "#A1A1A6",     // helleres Grau auf reinem Schwarz
+  textDisabled: "#48484A",
 
   // Borders
-  border: "#1E2D45",            // Subtile Navy-Border
-  borderSoft: "#2A3B57",
+  border: "#202020",            // Subtile Schwarz-Border
+  borderSoft: "#2A2A2A",
   borderActive: "rgba(0,200,83,0.35)",
 
-  // Pipeline (CRM Stages)
+  // Pipeline (CRM Stages) — Rafter-Linien werden Grau statt Blau
   roofOutline: "#FF3B30",
-  rafterLines: "#0A84FF",
+  rafterLines: "#8E8E93",
   pvModule: "rgba(0,200,83,0.35)",
   pvModuleStroke: "#00C853",
   chimney: "#FF9500",

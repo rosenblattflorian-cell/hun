@@ -16,6 +16,7 @@ import { colors, typography, spacing } from "../../src/theme";
 import { apiGet } from "../../src/api";
 import { useAuth } from "../../src/auth";
 import { RoofViewer3D } from "../../src/RoofViewer3D";
+import { SolarHaloHeader } from "../../src/SolarHaloHeader";
 
 export default function KundePortal() {
   const { user, logout } = useAuth();
@@ -78,21 +79,21 @@ export default function KundePortal() {
         contentContainerStyle={{ paddingBottom: 60 }}
         refreshControl={<RefreshControl refreshing={false} onRefresh={load} tintColor={colors.primary} />}
       >
-        {/* Header */}
-        <View style={s.hero}>
-          <View style={s.heroGlow} />
-          <Text style={s.welcome}>Willkommen zurück</Text>
-          <Text style={s.heroName}>{data?.customer?.name || user?.name}</Text>
-          {project?.kwp && (
-            <View style={s.kwpBadge}>
-              <Ionicons name="sunny" size={16} color={colors.primary} />
-              <Text style={s.kwpT}>Ihre {project.kwp} kWp PV-Anlage</Text>
-            </View>
-          )}
-          <TouchableOpacity onPress={logout} style={s.logoutFab}>
-            <Ionicons name="log-out" size={20} color={colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
+        {/* Solar Halo Header — Hero mit pulsierendem Glow */}
+        <SolarHaloHeader
+          name={(data?.customer?.name || user?.name || "").split(" ")[0]}
+          greeting="Willkommen zurück"
+          statusLabel={project?.kwp ? "Ihre Anlage" : undefined}
+          statusValue={project?.kwp ? `${project.kwp} kWp · ${project.module_count || 0} Module` : undefined}
+          initials={(data?.customer?.name || user?.name || "?").split(" ").map((p: string) => p[0]).join("").toUpperCase().slice(0, 2)}
+          mode="full"
+          showCircuit={true}
+        />
+
+        {/* Logout schwebend rechts oben */}
+        <TouchableOpacity onPress={logout} style={s.logoutFab} testID="customer-logout">
+          <Ionicons name="log-out" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
 
         {!project ? (
           <View style={{ padding: 40, alignItems: "center" }}>

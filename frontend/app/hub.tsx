@@ -11,6 +11,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, typography, spacing } from "../src/theme";
 import { SolarMitteLogo } from "../src/SolarMitteLogo";
+import { SolarHaloHeader } from "../src/SolarHaloHeader";
 import { useAuth } from "../src/auth";
 import { apiGet } from "../src/api";
 
@@ -36,6 +37,7 @@ const TILES: Tile[] = [
   { key: "calendar",  label: "Kalender",    icon: "calendar",            href: "/calendar",         color: colors.primary },
   { key: "monteur",   label: "Monteur",     icon: "hammer",              href: "/monteur",          color: colors.accent },
   { key: "ai",        label: "KI-Assist.",  icon: "sparkles",            href: "/(tabs)/mehr",      color: colors.primary, badge: "AI" },
+  { key: "admin",     label: "Module",      icon: "settings",            href: "/admin/modules",    color: colors.accent, badge: "DB", adminOnly: true },
   { key: "hero",      label: "HERO",        icon: "git-merge",           href: "/hero-sync",        color: colors.accent, adminOnly: true },
 ];
 
@@ -59,38 +61,21 @@ export default function Hub() {
 
   return (
     <SafeAreaView style={s.container} edges={["top", "bottom"]}>
-      {/* Header — Logo + Greeting + Logout (kompakt) */}
-      <View style={s.header}>
-        <View style={s.logoBox}>
-          <SolarMitteLogo size={56} withText={false} />
-        </View>
-        <View style={s.userBox}>
-          <Text style={s.greet}>{getGreeting()}</Text>
-          <Text style={s.userName} numberOfLines={1}>{user?.name}</Text>
-          <View style={[s.roleBadge, { borderColor: roleColor(user?.role) }]}>
-            <View style={[s.roleDot, { backgroundColor: roleColor(user?.role) }]} />
-            <Text style={[s.roleT, { color: roleColor(user?.role) }]}>
-              {(user?.role || "").toUpperCase()}
-            </Text>
-          </View>
-        </View>
-        <TouchableOpacity onPress={logout} style={s.logoutBtn} testID="logout-hub">
-          <Ionicons name="log-out-outline" size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
+      {/* Solar Halo Header — Full Mode mit pulsierendem Glow */}
+      <SolarHaloHeader
+        name={user?.name?.split(" ")[0] || "Profi"}
+        greeting={getGreeting()}
+        statusLabel={stats ? "Heute" : undefined}
+        statusValue={stats ? `${stats.total_kwp || 0} kWp · ${stats.in_installation || 0} Montagen` : undefined}
+        initials={(user?.name || "?").split(" ").map(p => p[0]).join("").toUpperCase().slice(0, 2)}
+        mode="full"
+        showCircuit={true}
+      />
 
-      {/* Live Stats Stripe */}
-      {stats && (
-        <View style={s.stats}>
-          <Stat n={stats.total_customers} l="Kunden" />
-          <Sep />
-          <Stat n={stats.angebote} l="Angebote" />
-          <Sep />
-          <Stat n={stats.in_installation} l="Montage" />
-          <Sep />
-          <Stat n={`${stats.total_kwp || 0}`} l="kWp" highlight />
-        </View>
-      )}
+      {/* Logout-Button schwebend oben rechts */}
+      <TouchableOpacity onPress={logout} style={s.logoutFloating} testID="logout-hub">
+        <Ionicons name="log-out-outline" size={18} color={colors.textSecondary} />
+      </TouchableOpacity>
 
       {/* Hauptgrid — 3 Spalten, 4 Reihen, NO SCROLL */}
       <View style={s.gridWrap}>
@@ -171,26 +156,8 @@ function roleColor(role?: string) {
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
 
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.sm,
-    gap: spacing.sm,
-  },
-  logoBox: { alignItems: "center", justifyContent: "center" },
-  userBox: { flex: 1, gap: 2 },
-  greet: { color: colors.textSecondary, fontSize: 10, letterSpacing: 1, textTransform: "uppercase", fontWeight: "700" },
-  userName: { color: colors.textPrimary, fontSize: 18, fontWeight: "900", letterSpacing: -0.4 },
-  roleBadge: {
-    flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2,
-    alignSelf: "flex-start", paddingHorizontal: 6, paddingVertical: 2,
-    borderRadius: 999, borderWidth: 1, backgroundColor: colors.bgDeep,
-  },
-  roleDot: { width: 4, height: 4, borderRadius: 2 },
-  roleT: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
-  logoutBtn: {
+  logoutFloating: {
+    position: "absolute", top: 50, right: 16, zIndex: 100,
     width: 36, height: 36, borderRadius: 10,
     backgroundColor: colors.paper, alignItems: "center", justifyContent: "center",
     borderWidth: 1, borderColor: colors.border,
@@ -205,6 +172,7 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     marginBottom: spacing.sm,
     alignItems: "center",
+    display: "none", // Replaced by Halo Status-Snippet
   },
   statSep: { width: 1, height: 24, backgroundColor: colors.border },
   statN: { color: colors.textPrimary, fontSize: 18, fontWeight: "900", letterSpacing: -0.4 },
